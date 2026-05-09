@@ -360,6 +360,7 @@ function renderPatientDetail() {
     <button class="bar-back" onclick="navigate('patients')">${svgIcon('ic-arrow-left', 22)}</button>
     <span class="bar-title">${escHtml(pt.name)}</span>
     <div class="bar-icons">
+      <button class="ib" onclick="sharePatient('${pt.id}')" title="Condividi">${svgIcon('ic-share')}</button>
       <button class="ib" onclick="printPatient('${pt.id}')" title="Stampa">${svgIcon('ic-print')}</button>
       <button class="ib" onclick="navigate('add-patient',{editMode:true})" title="Modifica">${svgIcon('ic-edit')}</button>
       <button class="ib" style="color:var(--r)" onclick="confirmDeletePatient('${pt.id}')" title="Elimina">${svgIcon('ic-trash')}</button>
@@ -1445,9 +1446,28 @@ function renderSettings() {
         <div class="stat-cell"><div class="stat-num">${D.medicineDb.length}</div><div class="stat-label">Database</div></div>
       </div>
       <div style="padding:12px 16px;font-size:12px;color:var(--t3)">${T('I dati sono salvati solo su questo dispositivo. Disinstallando l\'app li perderai.','Data is saved only on this device. Uninstalling the app will delete it.')}</div>
-      <div style="padding:0 16px 14px">
+      <div style="padding:0 16px 8px;display:flex;flex-direction:column;gap:8px">
+        <button class="btn-primary" style="display:flex;align-items:center;justify-content:center;gap:8px" onclick="exportData()">${svgIcon('ic-download',18)} ${T('Esporta backup (.json)','Export backup (.json)')}</button>
+        <button class="btn-secondary" style="display:flex;align-items:center;justify-content:center;gap:8px" onclick="importData()">${svgIcon('ic-upload',18)} ${T('Importa da backup','Import from backup')}</button>
         <button class="btn-danger" onclick="confirmClearData()">${T('Cancella tutti i dati','Clear all data')}</button>
       </div>
+    </div>
+
+    <div class="settings-sec">
+      <div class="settings-sec-title">${svgIcon('ic-lock',14)} ${T('PROTEZIONE PIN','PIN PROTECTION')}</div>
+      <div class="settings-sec-desc">${T('Proteggi l\'accesso con un PIN a 4 cifre. Utile se il telefono lo usano più persone.','Protect access with a 4-digit PIN. Useful if multiple people use the phone.')}</div>
+      ${getPin() ? `
+        <div class="settings-row">
+          <span class="settings-row-label">${T('PIN attivo','PIN active')}</span>
+          <span style="color:var(--p);font-weight:700;letter-spacing:4px">●●●●</span>
+        </div>
+        <div style="padding:10px 16px;display:flex;gap:8px">
+          <button class="pill active" onclick="showSetPinModal()">${T('Cambia PIN','Change PIN')}</button>
+          <button class="pill" style="color:var(--r);border-color:var(--r)" onclick="confirmRemovePin()">${T('Rimuovi','Remove')}</button>
+        </div>` : `
+        <div style="padding:12px 16px">
+          <button class="btn-primary" style="display:flex;align-items:center;justify-content:center;gap:8px" onclick="showSetPinModal()">${svgIcon('ic-lock',18)} ${T('Imposta PIN','Set PIN')}</button>
+        </div>`}
     </div>
   `;
 
@@ -1601,6 +1621,247 @@ function closeModal() {
   if (_modalEl) { _modalEl.remove(); _modalEl = null; }
 }
 
+// ── Export / Import ─────────────────────────────────────────
+function exportData() {
+  const json = JSON.stringify(D, null, 2);
+  const blob = new Blob([json], {type: 'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `medicinali-backup-${todayISO()}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function importData() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json,application/json';
+  input.onchange = e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      try {
+        const parsed = JSON.parse(ev.target.result);
+        if (!Array.isArray(parsed.patients) || !Array.isArray(parsed.operators)) {
+          alert(T('File non valido o corrotto.', 'Invalid or corrupted file.')); return;
+        }
+        const msg = T(
+          `Importare ${parsed.patients.length} pazienti e ${parsed.medicineDb?.length||0} farmaci dal database?\n\nI dati attuali verranno sostituiti.`,
+          `Import ${parsed.patients.length} patients and ${parsed.medicineDb?.length||0} database medicines?\n\nCurrent data will be replaced.`
+        );
+        if (!confirm(msg)) return;
+        D = parsed;
+        save();
+        closeModal();
+        navigate('patients');
+      } catch(err) {
+        alert(T('Errore nella lettura del file.', 'Error reading file.'));
+      }
+    };
+    reader.readAsText(file);
+  };
+  input.click();
+}
+
+// ── PIN ──────────────────────────────────────────────────────
+const PIN_KEY = 'medicinali_pin';
+let _pinBuffer = '';
+let _pinMode = 'unlock'; // 'unlock' | 'set-new' | 'set-confirm'
+let _pinTemp = '';
+
+function getPin() { return localStorage.getItem(PIN_KEY) || ''; }
+
+function checkPinOnStart() {
+  if (!getPin()) return;
+  _pinBuffer = '';
+  _pinMode = 'unlock';
+  renderPinScreen();
+}
+
+function renderPinScreen() {
+  const isUnlock = _pinMode === 'unlock';
+  const isConfirm = _pinMode === 'set-confirm';
+  const title = isUnlock
+    ? T('Inserisci PIN', 'Enter PIN')
+    : isConfirm
+    ? T('Conferma nuovo PIN', 'Confirm new PIN')
+    : T('Nuovo PIN (4 cifre)', 'New PIN (4 digits)');
+
+  let el = g('pin-overlay');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'pin-overlay';
+    document.body.appendChild(el);
+  }
+  el.innerHTML = `
+    <div class="pin-overlay">
+      <div style="font-size:26px;font-weight:800;color:#fff">Medicinali Pazienti</div>
+      ${isUnlock ? `<div style="font-size:14px;color:rgba(255,255,255,.7);margin-top:6px">${T('Inserisci il PIN per accedere','Enter PIN to access')}</div>` : ''}
+      <div style="font-size:16px;font-weight:600;color:rgba(255,255,255,.9);margin-top:${isUnlock?'32px':'16px'}">${title}</div>
+      <div class="pin-dots">
+        ${[0,1,2,3].map(i => `<div class="pin-dot ${i < _pinBuffer.length ? 'filled' : ''}" id="pd-${i}"></div>`).join('')}
+      </div>
+      <div id="pin-err" style="color:#ffcccc;font-size:13px;min-height:18px;text-align:center"></div>
+      <div class="pin-keypad">
+        ${[1,2,3,4,5,6,7,8,9,'','0','⌫'].map(k =>
+          k === '' ? '<div></div>' :
+          `<button class="pin-key ${k==='⌫'?'del':''}" onclick="pinPress('${k}')">${k}</button>`
+        ).join('')}
+      </div>
+      ${isUnlock ? `<button onclick="forgotPin()" style="margin-top:28px;background:none;border:none;color:rgba(255,255,255,.6);font-size:13px;cursor:pointer">${T('PIN dimenticato?','Forgot PIN?')}</button>` : `<button onclick="cancelPinSetup()" style="margin-top:28px;background:none;border:none;color:rgba(255,255,255,.6);font-size:13px;cursor:pointer">${T('Annulla','Cancel')}</button>`}
+    </div>`;
+}
+
+function pinPress(key) {
+  if (key === '⌫') {
+    _pinBuffer = _pinBuffer.slice(0, -1);
+  } else if (_pinBuffer.length < 4) {
+    _pinBuffer += key;
+  }
+  // Update dots
+  for (let i = 0; i < 4; i++) {
+    const dot = g(`pd-${i}`);
+    if (dot) dot.className = 'pin-dot' + (i < _pinBuffer.length ? ' filled' : '');
+  }
+  if (_pinBuffer.length === 4) {
+    setTimeout(() => handlePinComplete(), 120);
+  }
+}
+
+function handlePinComplete() {
+  if (_pinMode === 'unlock') {
+    if (_pinBuffer === getPin()) {
+      g('pin-overlay')?.remove();
+    } else {
+      const err = g('pin-err');
+      if (err) err.textContent = T('PIN errato. Riprova.', 'Wrong PIN. Try again.');
+      _pinBuffer = '';
+      for (let i = 0; i < 4; i++) {
+        const dot = g(`pd-${i}`);
+        if (dot) dot.classList.remove('filled');
+      }
+    }
+  } else if (_pinMode === 'set-new') {
+    _pinTemp = _pinBuffer;
+    _pinBuffer = '';
+    _pinMode = 'set-confirm';
+    renderPinScreen();
+  } else if (_pinMode === 'set-confirm') {
+    if (_pinBuffer === _pinTemp) {
+      localStorage.setItem(PIN_KEY, _pinBuffer);
+      g('pin-overlay')?.remove();
+      alert(T('PIN impostato con successo!', 'PIN set successfully!'));
+      renderSettings();
+    } else {
+      const err = g('pin-err');
+      if (err) err.textContent = T('I PIN non corrispondono. Riprova.', 'PINs don\'t match. Try again.');
+      _pinBuffer = '';
+      _pinTemp = '';
+      _pinMode = 'set-new';
+      setTimeout(() => renderPinScreen(), 800);
+    }
+  }
+}
+
+function showSetPinModal() {
+  _pinBuffer = '';
+  _pinTemp = '';
+  _pinMode = 'set-new';
+  renderPinScreen();
+}
+
+function confirmRemovePin() {
+  if (confirm(T('Rimuovere il PIN? L\'app non sarà più protetta.', 'Remove PIN? The app will no longer be protected.'))) {
+    localStorage.removeItem(PIN_KEY);
+    renderSettings();
+  }
+}
+
+function forgotPin() {
+  if (confirm(T('Per resettare il PIN devi cancellare i dati del sito dal browser.\nVuoi aprire le istruzioni?', 'To reset the PIN you must clear site data from the browser.\nOpen instructions?'))) {
+    alert(T('Sul telefono:\nImpostazioni browser → Privacy → Dati siti → cerca l\'URL dell\'app → Cancella.', 'On phone:\nBrowser settings → Privacy → Site data → find the app URL → Clear.'));
+  }
+}
+
+function cancelPinSetup() {
+  g('pin-overlay')?.remove();
+  _pinBuffer = '';
+}
+
+// ── Condivisione rapida ──────────────────────────────────────
+function sharePatient(id) {
+  const pt = getPatient(id);
+  if (!pt) return;
+
+  const html = `<div style="position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:50;display:flex;align-items:flex-end" onclick="closeModal()">
+    <div style="background:var(--sur);width:100%;border-radius:20px 20px 0 0;padding:20px" onclick="event.stopPropagation()">
+      <div style="font-size:17px;font-weight:700;margin-bottom:6px">${T('Condividi scheda','Share card')}</div>
+      <div style="font-size:13px;color:var(--t2);margin-bottom:18px">${escHtml(pt.name)} — ${T('Stanza','Room')} ${escHtml(pt.room||'—')}</div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        ${navigator.share ? `<button onclick="nativeShare('${id}')" class="btn-primary" style="display:flex;align-items:center;justify-content:center;gap:8px">${svgIcon('ic-share',18)} ${T('Condividi con...','Share with...')}</button>` : ''}
+        <button onclick="shareWhatsApp('${id}')" class="btn-secondary">💬 WhatsApp</button>
+        <button onclick="shareEmail('${id}')" class="btn-secondary">📧 ${T('Email','Email')}</button>
+        <button onclick="closeModal();printPatient('${id}')" class="btn-secondary">${svgIcon('ic-download',18)} ${T('Scarica / Stampa PDF','Download / Print PDF')}</button>
+      </div>
+    </div>
+  </div>`;
+  showModal(html);
+}
+
+function buildShareText(id) {
+  const pt = getPatient(id);
+  if (!pt) return '';
+  const meds = (pt.medicines || []).map(m => {
+    const sched = formatSchedule(m);
+    const st = getMedStatus(m);
+    return `  • ${m.name}${sched ? ' — ' + sched : ''}${st.label ? ' ('+st.label+')' : ''}`;
+  }).join('\n');
+  const visits = (pt.visits || [])
+    .filter(v => new Date(v.date) >= new Date())
+    .sort((a,b) => a.date.localeCompare(b.date))
+    .slice(0, 3)
+    .map(v => `  • ${fmtDatetime(v.date)} — ${v.title}`)
+    .join('\n');
+
+  return [
+    `*SCHEDA PAZIENTE*`,
+    `Nome: ${pt.name}`,
+    `Stanza: ${pt.room || '—'}`,
+    pt.allergies ? `⚠️ ${pt.allergies}` : '',
+    '',
+    `*MEDICINALI (${(pt.medicines||[]).length}):*`,
+    meds || '  Nessuno',
+    visits ? `\n*PROSSIME VISITE:*\n${visits}` : '',
+    pt.doctor?.name ? `\n👨‍⚕️ Medico: ${pt.doctor.name}${pt.doctor.phone ? ' — ' + pt.doctor.phone : ''}` : '',
+    pt.family?.name ? `👨‍👩‍👧 Familiare: ${pt.family.name}${pt.family.phone ? ' — ' + pt.family.phone : ''}` : '',
+  ].filter(Boolean).join('\n');
+}
+
+async function nativeShare(id) {
+  const pt = getPatient(id);
+  try {
+    await navigator.share({title: `Scheda ${pt.name}`, text: buildShareText(id)});
+    closeModal();
+  } catch(e) {}
+}
+
+function shareWhatsApp(id) {
+  window.open('https://wa.me/?text=' + encodeURIComponent(buildShareText(id)), '_blank');
+  closeModal();
+}
+
+function shareEmail(id) {
+  const pt = getPatient(id);
+  const subject = encodeURIComponent(`Scheda paziente — ${pt.name}`);
+  const body = encodeURIComponent(buildShareText(id));
+  window.open(`mailto:?subject=${subject}&body=${body}`, '_blank');
+  closeModal();
+}
+
 // ── Utils ───────────────────────────────────────────────────
 function g(id) { return document.getElementById(id); }
 
@@ -1617,12 +1878,12 @@ function escHtml(str) {
 // ── Init ────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('./sw.js').then(reg => {
-      // Quando il nuovo SW prende il controllo, ricarica la pagina
+    navigator.serviceWorker.register('./sw.js').then(() => {
       navigator.serviceWorker.addEventListener('controllerchange', () => {
         window.location.reload();
       });
     }).catch(() => {});
   }
   renderPatients();
+  checkPinOnStart();
 });
