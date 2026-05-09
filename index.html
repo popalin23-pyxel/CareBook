@@ -247,6 +247,21 @@ textarea.form-input{resize:vertical;min-height:70px}
 .autocomplete-item:last-child{border-bottom:none}
 .autocomplete-item:hover{background:var(--pl)}
 
+/* Time chips */
+.time-chip-grid{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.time-chip{border:1.5px solid var(--br);border-radius:50px;padding:7px 11px;font-size:13px;font-weight:600;background:var(--sur);color:var(--t2);font-variant-numeric:tabular-nums}
+.time-chip.active{border-color:var(--p);background:var(--p);color:#fff}
+
+/* Schedule rows */
+.schedule-list{margin-top:4px}
+.schedule-row{display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--br)}
+.schedule-time{font-size:15px;font-weight:700;min-width:52px;font-variant-numeric:tabular-nums}
+.qty-ctrl{display:flex;align-items:center;gap:8px;background:var(--bg);border-radius:50px;padding:5px 12px}
+.qty-ctrl button{background:none;border:none;font-size:20px;color:var(--p);font-weight:700;padding:0;line-height:1;cursor:pointer}
+.qty-ctrl span{font-size:15px;font-weight:700;min-width:28px;text-align:center}
+.schedule-unit{font-size:13px;color:var(--t2);flex:1}
+.schedule-del{background:none;border:none;color:var(--t3);font-size:20px;line-height:1;padding:0 4px;cursor:pointer}
+
 /* Print styles */
 @media print{
   body{max-width:none}

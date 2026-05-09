@@ -128,8 +128,34 @@ function getFmtLabel(fmtId) { return (FORMATS.find(f => f.id === fmtId) || FORMA
 function activeOp() { return D.operators.find(o => o.id === D.settings.activeOperatorId) || D.operators[0]; }
 
 function dosePerDay(med) {
+  if (med.schedule && med.schedule.length > 0) {
+    return med.schedule.reduce((s, t) => s + (t.qty || 0), 0);
+  }
   const d = med.dosage || {};
   return (d.mattina||0) + (d.pranzo||0) + (d.sera||0) + (d.notte||0);
+}
+
+function formatSchedule(med) {
+  if (med.schedule && med.schedule.length > 0) {
+    return med.schedule.map(t => `${t.time} ×${t.qty}`).join(' · ');
+  }
+  const d = med.dosage || {};
+  const parts = [];
+  if (d.mattina) parts.push(`${T('Mattina','Morning')} ${d.mattina}`);
+  if (d.pranzo) parts.push(`${T('Pranzo','Lunch')} ${d.pranzo}`);
+  if (d.sera) parts.push(`${T('Sera','Evening')} ${d.sera}`);
+  if (d.notte) parts.push(`${T('Notte','Night')} ${d.notte}`);
+  return parts.join(' · ');
+}
+
+function convertDosageToSchedule(dosage) {
+  if (!dosage) return [];
+  const r = [];
+  if (dosage.mattina) r.push({time:'08:00', qty: dosage.mattina});
+  if (dosage.pranzo)  r.push({time:'12:00', qty: dosage.pranzo});
+  if (dosage.sera)    r.push({time:'18:00', qty: dosage.sera});
+  if (dosage.notte)   r.push({time:'22:00', qty: dosage.notte});
+  return r;
 }
 
 function computeEndDate(startIso, totalQty, dpd, weekDays) {
@@ -405,7 +431,7 @@ function renderPatientDetail() {
       <div class="med-icon ${st.cls==='low'||st.cls==='expired'?'low':''}">${getFmtIcon(med.format)}</div>
       <div class="med-info">
         <div class="med-name">${escHtml(med.name)}</div>
-        <div class="med-sub">${getFmtLabel(med.format)||''}${med.days&&med.days.length>0&&med.days.length<7?' • '+formatDays(med.days):''}${dpd?' • '+dpd+'/'+T('giorno','day'):''}</div>
+        <div class="med-sub">${getFmtLabel(med.format)||''}${med.days&&med.days.length>0&&med.days.length<7?' · '+formatDays(med.days):''}${formatSchedule(med)?' · '+formatSchedule(med):dpd?' · '+dpd+'/'+T('giorno','day'):''}</div>
       </div>
       <span class="med-status ${st.cls}">${st.label}</span>
       ${svgIcon('ic-chevron', 16)}
@@ -443,12 +469,7 @@ function showMedDetail(medId) {
   if (!med) return;
   const st = getMedStatus(med);
   const dpd = dosePerDay(med);
-  const d = med.dosage || {};
-  const doseParts = [];
-  if (d.mattina) doseParts.push(`${T('Mattina','Morning')} ${d.mattina}`);
-  if (d.pranzo) doseParts.push(`${T('Pranzo','Lunch')} ${d.pranzo}`);
-  if (d.sera) doseParts.push(`${T('Sera','Evening')} ${d.sera}`);
-  if (d.notte) doseParts.push(`${T('Notte','Night')} ${d.notte}`);
+  const schedStr = formatSchedule(med);
 
   const html = `<div style="position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:50;display:flex;align-items:flex-end" onclick="closeModal()">
     <div style="background:var(--sur);width:100%;border-radius:20px 20px 0 0;padding:20px;max-height:80vh;overflow-y:auto" onclick="event.stopPropagation()">
@@ -463,7 +484,7 @@ function showMedDetail(medId) {
           <button class="ib" style="color:var(--r)" onclick="closeModal();confirmDeleteMed('${med.id}')">${svgIcon('ic-trash')}</button>
         </div>
       </div>
-      ${doseParts.length ? `<div style="font-size:14px;margin-bottom:8px"><strong>${T('Posologia:','Dosage:')}</strong> ${doseParts.join(' • ')}</div>` : ''}
+      ${schedStr ? `<div style="font-size:14px;margin-bottom:8px"><strong>${T('Orari:','Schedule:')}</strong> ${schedStr}</div>` : ''}
       ${dpd ? `<div style="font-size:14px;margin-bottom:8px"><strong>${T('Totale/giorno:','Per day:')}</strong> ${dpd}</div>` : ''}
       ${med.days&&med.days.length>0&&med.days.length<7 ? `<div style="font-size:14px;margin-bottom:8px"><strong>${T('Giorni:','Days:')}</strong> ${formatDays(med.days)}</div>` : ''}
       ${med.startDate ? `<div style="font-size:14px;margin-bottom:8px"><strong>${T('Inizio:','Start:')}</strong> ${fmtDate(med.startDate)}</div>` : ''}
@@ -643,10 +664,13 @@ function savePatient(existingId) {
 }
 
 // ── PAGE: Add/Edit Medicine ─────────────────────────────────
+const PRESET_TIMES = ['06:00','08:00','10:00','12:00','14:00','16:00','18:00','20:00','22:00','00:00'];
+
 let _medFormState = {
   format: '',
   days: [0,1,2,3,4,5,6],
-  endDate: ''
+  endDate: '',
+  schedule: []
 };
 
 function renderAddMed() {
@@ -662,14 +686,14 @@ function renderAddMed() {
     _medFormState = {
       format: existing.format || '',
       days: existing.days != null ? [...existing.days] : [0,1,2,3,4,5,6],
-      endDate: existing.endDate || ''
+      endDate: existing.endDate || '',
+      schedule: existing.schedule ? [...existing.schedule] : convertDosageToSchedule(existing.dosage)
     };
   } else {
-    _medFormState = { format: '', days: [0,1,2,3,4,5,6], endDate: '' };
+    _medFormState = { format: '', days: [0,1,2,3,4,5,6], endDate: '', schedule: [] };
   }
 
   const v = existing || {};
-  const d = v.dosage || {};
   const alertDefault = D.settings.alertDays;
 
   document.getElementById('content-add-med').innerHTML = `
@@ -688,14 +712,8 @@ function renderAddMed() {
     </div>
 
     <div class="form-group">
-      <label class="form-label">${T('Posologia (unità per assunzione)','Dosage (units per intake)')}</label>
-      <div class="dose-grid">
-        ${['mattina','pranzo','sera','notte'].map(slot => `
-          <div class="dose-cell">
-            <label>${T(slot.charAt(0).toUpperCase()+slot.slice(1), {mattina:'Morning',pranzo:'Lunch',sera:'Evening',notte:'Night'}[slot])}</label>
-            <input type="number" min="0" step="0.5" id="f-dose-${slot}" value="${d[slot]||0}" oninput="recalcEnd()">
-          </div>`).join('')}
-      </div>
+      <label class="form-label">${T('Orari e dosi','Schedule & doses')}</label>
+      <div id="time-selector">${buildTimeSelector()}</div>
     </div>
 
     <div class="form-group">
@@ -759,18 +777,87 @@ function toggleDay(i) {
 
 function setAllDays() {
   _medFormState.days = [0,1,2,3,4,5,6];
-  document.getElementById('days-grid').innerHTML = buildDaysGrid();
+  renderAddMed();
+}
+
+// ── Time selector ───────────────────────────────────────────
+function buildTimeSelector() {
+  const sel = _medFormState.schedule.map(t => t.time);
+  let html = '<div class="time-chip-grid">';
+  PRESET_TIMES.forEach(t => {
+    html += `<button class="time-chip ${sel.includes(t)?'active':''}" onclick="toggleTime('${t}')">${t}</button>`;
+  });
+  html += '</div>';
+
+  if (_medFormState.schedule.length > 0) {
+    const sorted = [..._medFormState.schedule].sort((a,b) => a.time.localeCompare(b.time));
+    const total = sorted.reduce((s,t) => s + (t.qty||0), 0);
+    html += '<div class="schedule-list">';
+    sorted.forEach(entry => {
+      html += `<div class="schedule-row">
+        <span class="schedule-time">${entry.time}</span>
+        <div class="qty-ctrl">
+          <button onclick="changeScheduleQty('${entry.time}',-0.5)">−</button>
+          <span>${entry.qty}</span>
+          <button onclick="changeScheduleQty('${entry.time}',0.5)">+</button>
+        </div>
+        <span class="schedule-unit">${T('unità','units')}</span>
+        <button class="schedule-del" onclick="removeScheduleTime('${entry.time}')">×</button>
+      </div>`;
+    });
+    html += `<div style="text-align:right;font-size:13px;color:var(--t2);padding:8px 0">
+      ${T('Totale:','Total:')} <strong>${total}</strong> ${T('al giorno','per day')}
+    </div></div>`;
+  }
+
+  html += `<div style="display:flex;gap:8px;margin-top:8px">
+    <input type="time" id="custom-time-input" class="form-input" style="flex:1">
+    <button class="pill active" style="white-space:nowrap" onclick="addCustomTime()">+ ${T('Altro orario','Other time')}</button>
+  </div>`;
+  return html;
+}
+
+function toggleTime(time) {
+  const idx = _medFormState.schedule.findIndex(t => t.time === time);
+  if (idx >= 0) _medFormState.schedule.splice(idx, 1);
+  else _medFormState.schedule.push({time, qty: 1});
+  _medFormState.schedule.sort((a,b) => a.time.localeCompare(b.time));
+  document.getElementById('time-selector').innerHTML = buildTimeSelector();
   recalcEnd();
-  // re-render all day pill
-  renderAddMed(); // heavy but safe
+}
+
+function changeScheduleQty(time, delta) {
+  const entry = _medFormState.schedule.find(t => t.time === time);
+  if (entry) {
+    entry.qty = Math.round(Math.max(0.5, entry.qty + delta) * 2) / 2;
+    document.getElementById('time-selector').innerHTML = buildTimeSelector();
+    recalcEnd();
+  }
+}
+
+function removeScheduleTime(time) {
+  _medFormState.schedule = _medFormState.schedule.filter(t => t.time !== time);
+  document.getElementById('time-selector').innerHTML = buildTimeSelector();
+  recalcEnd();
+}
+
+function addCustomTime() {
+  const input = document.getElementById('custom-time-input');
+  if (!input || !input.value) return;
+  const time = input.value;
+  if (!_medFormState.schedule.find(t => t.time === time)) {
+    _medFormState.schedule.push({time, qty: 1});
+    _medFormState.schedule.sort((a,b) => a.time.localeCompare(b.time));
+  }
+  input.value = '';
+  document.getElementById('time-selector').innerHTML = buildTimeSelector();
+  recalcEnd();
 }
 
 function recalcEnd() {
   const start = g('f-start')?.value;
   const qty = parseFloat(g('f-qty')?.value);
-  const dpd = (['mattina','pranzo','sera','notte'].reduce((s, slot) => {
-    return s + (parseFloat(g('f-dose-'+slot)?.value)||0);
-  }, 0));
+  const dpd = _medFormState.schedule.reduce((s, t) => s + (t.qty || 0), 0);
   if (!start || !qty || !dpd) return;
   const days = _medFormState.days.length === 7 ? null : _medFormState.days;
   const end = computeEndDate(start, qty, dpd, days);
@@ -816,12 +903,7 @@ function saveMed(existingId) {
     id: existingId || uid(),
     name,
     format: _medFormState.format,
-    dosage: {
-      mattina: parseFloat(g('f-dose-mattina').value)||0,
-      pranzo: parseFloat(g('f-dose-pranzo').value)||0,
-      sera: parseFloat(g('f-dose-sera').value)||0,
-      notte: parseFloat(g('f-dose-notte').value)||0
-    },
+    schedule: [..._medFormState.schedule],
     days: _medFormState.days.length < 7 ? [..._medFormState.days] : [],
     startDate: start,
     endDate: g('f-end').value || _medFormState.endDate || null,
@@ -1331,17 +1413,12 @@ function printPatient(id) {
   const fam = pt.family || {};
 
   let medsRows = meds.map(med => {
-    const d = med.dosage || {};
-    const parts = [];
-    if (d.mattina) parts.push(`Mattina ${d.mattina}`);
-    if (d.pranzo) parts.push(`Pranzo ${d.pranzo}`);
-    if (d.sera) parts.push(`Sera ${d.sera}`);
-    if (d.notte) parts.push(`Notte ${d.notte}`);
     const st = getMedStatus(med);
+    const sched = formatSchedule(med);
     return `<tr>
-      <td><strong>${escHtml(med.name)}</strong><br><small>${getFmtLabel(med.format)}${med.days&&med.days.length>0&&med.days.length<7?' • '+formatDays(med.days):''}</small></td>
+      <td><strong>${escHtml(med.name)}</strong><br><small>${getFmtLabel(med.format)}${med.days&&med.days.length>0&&med.days.length<7?' · '+formatDays(med.days):''}</small></td>
       <td>${med.totalQty||'—'}</td>
-      <td>${parts.join(' • ') || '—'}<br><small>${dosePerDay(med)||0}/giorno</small></td>
+      <td>${sched||'—'}<br><small>${dosePerDay(med)||0}/giorno</small></td>
       <td>${fmtDate(med.startDate)}</td>
       <td>${fmtDate(med.endDate)}</td>
       <td><strong>${st.label||'—'}</strong></td>
