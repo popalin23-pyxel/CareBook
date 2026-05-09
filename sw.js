@@ -13,11 +13,29 @@ self.addEventListener('activate', e => {
 });
 
 self.addEventListener('fetch', e => {
+  const url = new URL(e.request.url);
+
+  // Icone: cache-first (non cambiano mai)
+  if (url.pathname.endsWith('.png') || url.pathname.endsWith('.ico')) {
+    e.respondWith(
+      caches.match(e.request).then(cached => cached || fetch(e.request).then(res => {
+        caches.open(CACHE).then(c => c.put(e.request, res.clone()));
+        return res;
+      }))
+    );
+    return;
+  }
+
+  // App files (HTML, JS, manifest): network-first
+  // → prende sempre la versione aggiornata quando c'è connessione
+  // → cade sulla cache se offline
   e.respondWith(
-    caches.match(e.request).then(cached => cached || fetch(e.request).then(res => {
+    fetch(e.request).then(res => {
       const copy = res.clone();
       caches.open(CACHE).then(c => c.put(e.request, copy)).catch(() => {});
       return res;
-    }).catch(() => caches.match('./index.html')))
+    }).catch(() =>
+      caches.match(e.request).then(cached => cached || caches.match('./index.html'))
+    )
   );
 });
