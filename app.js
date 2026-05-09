@@ -153,7 +153,11 @@ function convertDosageToSchedule(dosage) {
   const r = [];
   if (dosage.mattina) r.push({time:'08:00', qty: dosage.mattina});
   if (dosage.pranzo)  r.push({time:'12:00', qty: dosage.pranzo});
-  if (dosage.sera)    r.push({time:'18:00', qty: dosage.sera});
+  if (dosage.sera) {
+    const half = Math.round((dosage.sera / 2) * 2) / 2;
+    r.push({time:'18:00', qty: half});
+    r.push({time:'20:00', qty: dosage.sera - half});
+  }
   if (dosage.notte)   r.push({time:'22:00', qty: dosage.notte});
   return r;
 }
@@ -470,9 +474,24 @@ function showMedDetail(medId) {
   const st = getMedStatus(med);
   const dpd = dosePerDay(med);
   const schedStr = formatSchedule(med);
+  const restocks = med.restocks || [];
+
+  // Build restock log HTML
+  let restockLog = '';
+  if (restocks.length > 0) {
+    restockLog = `<div style="margin-top:6px;border-top:1px solid var(--br);padding-top:8px">`;
+    restocks.forEach(r => {
+      restockLog += `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px">
+        <span style="color:var(--p);font-weight:700">+${r.qty}</span>
+        <span style="color:var(--t2)">${fmtDate(r.date)}${r.note ? ' · ' + escHtml(r.note) : ''}</span>
+        <button onclick="deleteRestock('${medId}','${r.id}')" style="margin-left:auto;background:none;border:none;color:var(--t3);font-size:16px;cursor:pointer">×</button>
+      </div>`;
+    });
+    restockLog += `</div>`;
+  }
 
   const html = `<div style="position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:50;display:flex;align-items:flex-end" onclick="closeModal()">
-    <div style="background:var(--sur);width:100%;border-radius:20px 20px 0 0;padding:20px;max-height:80vh;overflow-y:auto" onclick="event.stopPropagation()">
+    <div style="background:var(--sur);width:100%;border-radius:20px 20px 0 0;padding:20px;max-height:85vh;overflow-y:auto" onclick="event.stopPropagation()">
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
         <div class="med-icon" style="width:44px;height:44px;font-size:18px">${getFmtIcon(med.format)}</div>
         <div>
@@ -484,18 +503,113 @@ function showMedDetail(medId) {
           <button class="ib" style="color:var(--r)" onclick="closeModal();confirmDeleteMed('${med.id}')">${svgIcon('ic-trash')}</button>
         </div>
       </div>
+
       ${schedStr ? `<div style="font-size:14px;margin-bottom:8px"><strong>${T('Orari:','Schedule:')}</strong> ${schedStr}</div>` : ''}
       ${dpd ? `<div style="font-size:14px;margin-bottom:8px"><strong>${T('Totale/giorno:','Per day:')}</strong> ${dpd}</div>` : ''}
       ${med.days&&med.days.length>0&&med.days.length<7 ? `<div style="font-size:14px;margin-bottom:8px"><strong>${T('Giorni:','Days:')}</strong> ${formatDays(med.days)}</div>` : ''}
       ${med.startDate ? `<div style="font-size:14px;margin-bottom:8px"><strong>${T('Inizio:','Start:')}</strong> ${fmtDate(med.startDate)}</div>` : ''}
       ${med.endDate ? `<div style="font-size:14px;margin-bottom:8px"><strong>${T('Fine prevista:','Expected end:')}</strong> ${fmtDate(med.endDate)}</div>` : ''}
-      ${med.totalQty!=null ? `<div style="font-size:14px;margin-bottom:8px"><strong>${T('Quantità totale:','Total qty:')}</strong> ${med.totalQty}</div>` : ''}
-      <div style="margin-top:12px;padding:10px;border-radius:10px;background:${st.cls==='expired'?'#fff5f5':st.cls==='low'?'var(--wl)':'var(--pl)'}">
+
+      ${med.totalQty != null ? `
+      <div style="background:var(--bg);border-radius:10px;padding:10px 12px;margin-bottom:10px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px">
+          <strong style="font-size:14px">${T('Pastiglie totali:','Total pills:')}</strong>
+          <span style="font-size:18px;font-weight:800;color:var(--p)">${med.totalQty}</span>
+        </div>
+        ${restockLog}
+        <button onclick="showRestockForm('${med.id}')" style="width:100%;margin-top:10px;padding:9px;border:1.5px dashed var(--p);border-radius:10px;background:none;color:var(--p);font-size:14px;font-weight:600;cursor:pointer">
+          + ${T('Aggiungi pastiglie','Add pills')}
+        </button>
+      </div>` : `
+      <button onclick="showRestockForm('${med.id}')" style="width:100%;margin-bottom:10px;padding:9px;border:1.5px dashed var(--p);border-radius:10px;background:none;color:var(--p);font-size:14px;font-weight:600;cursor:pointer">
+        + ${T('Aggiungi pastiglie','Add pills')}
+      </button>`}
+
+      <div style="padding:10px;border-radius:10px;background:${st.cls==='expired'?'#fff5f5':st.cls==='low'?'var(--wl)':'var(--pl)'}">
         <span style="font-size:14px;font-weight:600;color:${st.cls==='expired'?'var(--r)':st.cls==='low'?'var(--w)':'var(--p)'}">${st.label||T('In corso','Ongoing')}</span>
       </div>
     </div>
   </div>`;
   showModal(html);
+}
+
+function showRestockForm(medId) {
+  const pt = getPatient();
+  const med = (pt?.medicines||[]).find(m => m.id === medId);
+  if (!med) return;
+
+  const overlay = document.createElement('div');
+  overlay.id = 'restock-overlay';
+  overlay.innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:60;display:flex;align-items:flex-end" onclick="closeRestockForm()">
+      <div style="background:var(--sur);width:100%;border-radius:20px 20px 0 0;padding:20px;max-width:600px;margin:0 auto" onclick="event.stopPropagation()">
+        <div style="font-size:17px;font-weight:700;margin-bottom:16px">
+          + ${T('Aggiungi pastiglie','Add pills')} — ${escHtml(med.name)}
+        </div>
+        <div class="form-group">
+          <label class="form-label">${T('Quante pastiglie aggiungi?','How many pills to add?')}</label>
+          <input class="form-input" id="f-restock-qty" type="number" min="1" step="1"
+            placeholder="${T('es. 28','e.g. 28')}" style="font-size:22px;font-weight:700;text-align:center">
+        </div>
+        <div class="form-group">
+          <label class="form-label">${T('Note (opzionale)','Notes (optional)')}</label>
+          <input class="form-input" id="f-restock-note"
+            placeholder="${T('es. portate da Mario, acquistato in farmacia...','e.g. brought by Mario, bought at pharmacy...')}">
+        </div>
+        <button class="btn-primary" onclick="saveRestock('${medId}')">${T('Aggiungi','Add')}</button>
+        <button class="btn-secondary" onclick="closeRestockForm()">${T('Annulla','Cancel')}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  setTimeout(() => document.getElementById('f-restock-qty')?.focus(), 100);
+}
+
+function closeRestockForm() {
+  document.getElementById('restock-overlay')?.remove();
+}
+
+function saveRestock(medId) {
+  const qty = parseFloat(document.getElementById('f-restock-qty')?.value);
+  if (!qty || qty <= 0) { alert(T('Inserisci una quantità valida','Enter a valid quantity')); return; }
+  const note = document.getElementById('f-restock-note')?.value.trim() || '';
+
+  const pt = getPatient();
+  const med = (pt?.medicines||[]).find(m => m.id === medId);
+  if (!med) return;
+
+  if (!med.restocks) med.restocks = [];
+  med.restocks.push({ id: uid(), qty, note, date: new Date().toISOString() });
+  med.totalQty = (med.totalQty || 0) + qty;
+
+  // Ricalcola data fine
+  const dpd = dosePerDay(med);
+  if (med.startDate && dpd) {
+    const weekDays = med.days && med.days.length > 0 && med.days.length < 7 ? med.days : null;
+    med.endDate = computeEndDate(med.startDate, med.totalQty, dpd, weekDays);
+  }
+
+  save();
+  closeRestockForm();
+  closeModal();
+  showMedDetail(medId);
+}
+
+function deleteRestock(medId, restockId) {
+  const pt = getPatient();
+  const med = (pt?.medicines||[]).find(m => m.id === medId);
+  if (!med || !med.restocks) return;
+  const r = med.restocks.find(x => x.id === restockId);
+  if (!r) return;
+  med.totalQty = Math.max(0, (med.totalQty || 0) - r.qty);
+  med.restocks = med.restocks.filter(x => x.id !== restockId);
+  const dpd = dosePerDay(med);
+  if (med.startDate && dpd && med.totalQty > 0) {
+    const weekDays = med.days && med.days.length > 0 && med.days.length < 7 ? med.days : null;
+    med.endDate = computeEndDate(med.startDate, med.totalQty, dpd, weekDays);
+  }
+  save();
+  closeModal();
+  showMedDetail(medId);
 }
 
 function formatDays(days) {
