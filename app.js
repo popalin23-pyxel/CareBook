@@ -51,7 +51,8 @@ const S = {
   calMode: 'visite',
   calDate: new Date(),
   calSelected: new Date(),
-  dbSearch: ''
+  dbSearch: '',
+  searchGlobal: ''
 };
 
 // ── Data ────────────────────────────────────────────────────
@@ -124,6 +125,7 @@ function back() {
     'db': 'patients',
     'add-db-med': 'db',
     'settings': 'patients',
+    'search': 'patients',
     'register': 'login'
   };
   navigate(map[S.page] || 'patients');
@@ -140,6 +142,7 @@ function renderPage(page) {
     'db': renderDb,
     'add-db-med': renderAddDbMed,
     'settings': renderSettings,
+    'search': renderSearch,
     'login': renderLogin,
     'register': renderRegister
   };
@@ -246,6 +249,142 @@ function nextEndDate(pt) {
     .map(m => m.endDate)
     .sort();
   return ends[0] || null;
+}
+
+// ── PAGE: Ricerca globale ────────────────────────────────────
+function renderSearch() {
+  const el = g('page-search');
+  if (!el) return;
+  const q = S.searchGlobal || '';
+  el.innerHTML = `
+    <div class="bar">
+      <button class="bar-back" onclick="navigate('patients')">${svgIcon('ic-arrow-left',22)}</button>
+      <span class="bar-title">${T('Ricerca','Search')}</span>
+    </div>
+    <div class="scroll">
+      <div class="search-wrap" style="margin-bottom:4px">
+        ${svgIcon('ic-search',16)}
+        <input class="search-inp" id="f-global-search"
+          placeholder="${T('Paziente, medicinale, visita...','Patient, medicine, visit...')}"
+          value="${escHtml(q)}"
+          oninput="S.searchGlobal=this.value;renderSearchResults()"
+          autocomplete="off">
+      </div>
+      <div style="font-size:12px;color:var(--t3);margin-bottom:14px;padding-left:2px">${T('Cerca su tutti i pazienti, medicinali e visite','Search across all patients, medicines and visits')}</div>
+      <div id="search-results">${q ? '' : buildSearchEmpty()}</div>
+    </div>`;
+  setTimeout(() => g('f-global-search')?.focus(), 80);
+  if (q) renderSearchResults();
+}
+
+function buildSearchEmpty() {
+  return `<div class="empty" style="padding:60px 20px">
+    ${svgIcon('ic-search',40)}
+    <div style="margin-top:12px">${T('Scrivi per cercare...','Start typing to search...')}</div>
+  </div>`;
+}
+
+function renderSearchResults() {
+  const el = g('search-results');
+  if (!el) return;
+  const q = (S.searchGlobal || '').toLowerCase().trim();
+  if (!q) { el.innerHTML = buildSearchEmpty(); return; }
+
+  // ── Pazienti per nome / stanza ──
+  const patMatches = D.patients.filter(p =>
+    p.name.toLowerCase().includes(q) || (p.room||'').toLowerCase().includes(q)
+  );
+
+  // ── Medicinali: raccogli {med, patient} e raggruppa per nome ──
+  const medGroups = {};
+  D.patients.forEach(pt => {
+    (pt.medicines||[]).forEach(med => {
+      if (!med.name.toLowerCase().includes(q)) return;
+      const key = med.name.toLowerCase().trim();
+      if (!medGroups[key]) medGroups[key] = { name: med.name, entries: [] };
+      medGroups[key].entries.push({ med, pt });
+    });
+  });
+  const medGroupKeys = Object.keys(medGroups).sort();
+
+  // ── Visite per titolo / luogo ──
+  const visitMatches = [];
+  D.patients.forEach(pt => {
+    (pt.visits||[]).forEach(v => {
+      if (v.title.toLowerCase().includes(q) || (v.location||'').toLowerCase().includes(q))
+        visitMatches.push({ v, pt });
+    });
+  });
+  visitMatches.sort((a,b) => b.v.date.localeCompare(a.v.date));
+
+  if (!patMatches.length && !medGroupKeys.length && !visitMatches.length) {
+    el.innerHTML = `<div class="empty">${T('Nessun risultato per','No results for')} "<strong>${escHtml(S.searchGlobal)}</strong>"</div>`;
+    return;
+  }
+
+  let html = '';
+
+  // Pazienti
+  if (patMatches.length) {
+    html += `<div class="sec-hd">${T('Pazienti','Patients')} (${patMatches.length})</div>`;
+    patMatches.forEach(pt => {
+      const nMeds = (pt.medicines||[]).length;
+      html += `<div class="patient-card ${hasAlert(pt)?'has-alert':''}" onclick="navigate('patient-detail',{patientId:'${pt.id}'})">
+        <div class="avatar">${escHtml(pt.name[0].toUpperCase())}</div>
+        <div class="patient-info">
+          <div class="patient-name-row">
+            <span class="patient-name">${escHtml(pt.name)}</span>
+            ${pt.room ? `<span class="badge">${escHtml(pt.room)}</span>` : ''}
+          </div>
+          <div class="patient-sub">${nMeds} ${T(nMeds===1?'medicinale':'medicinali',nMeds===1?'medicine':'medicines')}</div>
+        </div>
+        ${svgIcon('ic-chevron',18)}
+      </div>`;
+    });
+  }
+
+  // Medicinali raggruppati
+  medGroupKeys.forEach(key => {
+    const grp = medGroups[key];
+    const n = grp.entries.length;
+    html += `<div class="sec-hd">💊 ${escHtml(grp.name)} — ${n} ${T(n===1?'paziente':'pazienti',n===1?'patient':'patients')}</div>
+    <div class="section-box" style="padding:0;overflow:hidden">`;
+    grp.entries.forEach(({ med, pt }, idx) => {
+      const st = getMedStatus(med);
+      const dpd = dosePerDay(med);
+      const fmtLbl = medFmtLabel(med);
+      const pills = med.totalQty != null ? `${med.totalQty} ${fmtLbl||T('rimaste','left')}` : '';
+      const stColor = st.cls==='expired'?'var(--r)':st.cls==='low'?'var(--w)':'var(--p)';
+      html += `<div style="display:flex;align-items:center;gap:12px;padding:12px 14px;${idx>0?'border-top:1px solid var(--br)':''};cursor:pointer" onclick="navigate('patient-detail',{patientId:'${pt.id}'})">
+        <div class="avatar" style="width:38px;height:38px;font-size:15px;flex-shrink:0">${escHtml(pt.name[0].toUpperCase())}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:15px;font-weight:600">${escHtml(pt.name)}</div>
+          <div style="font-size:12px;color:var(--t2);margin-top:3px;display:flex;flex-wrap:wrap;gap:6px">
+            ${pt.room ? `<span>${svgIcon('ic-home',11)} ${escHtml(pt.room)}</span>` : ''}
+            ${dpd ? `<span>⚖️ ${dpd} ${fmtLbl||T('al giorno','per day')}</span>` : ''}
+            ${pills ? `<span>💊 ${pills}</span>` : ''}
+            ${st.label ? `<span style="color:${stColor};font-weight:600">${st.label}</span>` : ''}
+          </div>
+        </div>
+        ${svgIcon('ic-chevron',16)}
+      </div>`;
+    });
+    html += `</div>`;
+  });
+
+  // Visite
+  if (visitMatches.length) {
+    html += `<div class="sec-hd">${T('Visite','Visits')} (${visitMatches.length})</div>`;
+    visitMatches.forEach(({ v, pt }) => {
+      html += `<div class="section-box" style="cursor:pointer;margin-bottom:8px" onclick="navigate('patient-detail',{patientId:'${pt.id}'})">
+        <div style="font-size:12px;color:var(--t2);margin-bottom:4px">${escHtml(pt.name)}${pt.room ? ` · Stanza ${escHtml(pt.room)}` : ''}</div>
+        <div style="font-size:15px;font-weight:600">${escHtml(v.title)}</div>
+        <div style="font-size:12px;color:var(--t2);margin-top:3px">${fmtDatetime(v.date)}${v.location ? ' · ' + escHtml(v.location) : ''}</div>
+      </div>`;
+    });
+  }
+
+  el.innerHTML = html;
 }
 
 // ── Firebase Auth ────────────────────────────────────────────
@@ -462,6 +601,7 @@ function renderPatients() {
       <div style="font-size:13px;color:var(--t2)">${T('Gestisci pazienti e medicinali','Manage patients and medicines')}</div>
     </div>
     <div class="bar-icons">
+      <button class="ib" onclick="navigate('search')" title="Ricerca">${svgIcon('ic-search')}</button>
       <button class="ib" onclick="navigate('calendar')" title="Calendario">${svgIcon('ic-cal')}</button>
       <button class="ib" onclick="navigate('db')" title="Database">${svgIcon('ic-db')}</button>
       <button class="ib" onclick="navigate('settings')" title="Impostazioni">${svgIcon('ic-cog')}</button>
