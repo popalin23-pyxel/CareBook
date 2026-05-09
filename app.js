@@ -330,7 +330,10 @@ function renderLogin() {
         </div>
         <div id="login-err" style="color:var(--r);font-size:13px;margin-bottom:10px;min-height:18px"></div>
         <button class="btn-primary" onclick="doLogin()">Accedi</button>
-        <div style="text-align:center;margin-top:20px;font-size:14px;color:var(--t2)">Non hai un account? <button onclick="navigate('register')" style="background:none;border:none;color:var(--p);font-size:14px;font-weight:600;cursor:pointer">Registrati</button></div>
+        <div style="text-align:center;margin-top:14px">
+          <button onclick="forgotPassword()" style="background:none;border:none;color:var(--t2);font-size:13px;cursor:pointer;text-decoration:underline">Password dimenticata?</button>
+        </div>
+        <div style="text-align:center;margin-top:10px;font-size:14px;color:var(--t2)">Non hai un account? <button onclick="navigate('register')" style="background:none;border:none;color:var(--p);font-size:14px;font-weight:600;cursor:pointer">Registrati</button></div>
       </div>
     </div>`;
   setTimeout(() => { g('f-login-pw')?.addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); }); }, 100);
@@ -384,6 +387,22 @@ async function doRegister() {
   } catch(err) {
     const msgs = { 'auth/email-already-in-use':'Email già in uso.', 'auth/invalid-email':'Email non valida.', 'auth/weak-password':'Password troppo debole (min 6 caratteri).', 'auth/operation-not-allowed':'Registrazione non abilitata nel progetto Firebase.' };
     if (errEl) errEl.textContent = msgs[err.code] || 'Errore di registrazione. Riprova.';
+  }
+}
+
+async function forgotPassword() {
+  const email = g('f-login-email')?.value.trim();
+  const errEl = g('login-err');
+  if (!email) {
+    if (errEl) { errEl.style.color = 'var(--w)'; errEl.textContent = 'Inserisci prima la tua email.'; }
+    return;
+  }
+  try {
+    await auth.sendPasswordResetEmail(email);
+    if (errEl) { errEl.style.color = 'var(--p)'; errEl.textContent = 'Email di reset inviata! Controlla la posta.'; }
+  } catch(err) {
+    const msgs = { 'auth/user-not-found':'Nessun account con questa email.', 'auth/invalid-email':'Email non valida.' };
+    if (errEl) { errEl.style.color = 'var(--r)'; errEl.textContent = msgs[err.code] || 'Errore. Riprova.'; }
   }
 }
 
