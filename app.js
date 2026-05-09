@@ -125,6 +125,10 @@ function renderPage(page) {
 function getPatient(id) { return D.patients.find(p => p.id === (id || S.patientId)); }
 function getFmtIcon(fmtId) { return (FORMATS.find(f => f.id === fmtId) || FORMATS[0]).icon; }
 function getFmtLabel(fmtId) { return (FORMATS.find(f => f.id === fmtId) || FORMATS[0]).label; }
+function medFmtLabel(med) {
+  if (med && med.format === 'altro' && med.customFormat) return med.customFormat;
+  return getFmtLabel(med?.format);
+}
 function activeOp() { return D.operators.find(o => o.id === D.settings.activeOperatorId) || D.operators[0]; }
 
 function dosePerDay(med) {
@@ -436,7 +440,7 @@ function renderPatientDetail() {
       <div class="med-icon ${st.cls==='low'||st.cls==='expired'?'low':''}">${getFmtIcon(med.format)}</div>
       <div class="med-info">
         <div class="med-name">${escHtml(med.name)}</div>
-        <div class="med-sub">${getFmtLabel(med.format)||''}${med.days&&med.days.length>0&&med.days.length<7?' · '+formatDays(med.days):''}${formatSchedule(med)?' · '+formatSchedule(med):dpd?' · '+dpd+'/'+T('giorno','day'):''}</div>
+        <div class="med-sub">${medFmtLabel(med)||''}${med.days&&med.days.length>0&&med.days.length<7?' · '+formatDays(med.days):''}${formatSchedule(med)?' · '+formatSchedule(med):dpd?' · '+dpd+'/'+T('giorno','day'):''}</div>
       </div>
       <span class="med-status ${st.cls}">${st.label}</span>
       ${svgIcon('ic-chevron', 16)}
@@ -497,7 +501,7 @@ function showMedDetail(medId) {
         <div class="med-icon" style="width:44px;height:44px;font-size:18px">${getFmtIcon(med.format)}</div>
         <div>
           <div style="font-size:18px;font-weight:700">${escHtml(med.name)}</div>
-          <div style="font-size:13px;color:var(--t2)">${getFmtLabel(med.format)}</div>
+          <div style="font-size:13px;color:var(--t2)">${medFmtLabel(med)}</div>
         </div>
         <div style="margin-left:auto;display:flex;gap:6px">
           <button class="ib" onclick="closeModal();navigate('add-med',{medId:'${med.id}'})">${svgIcon('ic-edit')}</button>
@@ -783,6 +787,7 @@ const PRESET_TIMES = ['06:00','08:00','10:00','12:00','14:00','16:00','18:00','2
 
 let _medFormState = {
   format: '',
+  customFormat: '',
   days: [0,1,2,3,4,5,6],
   endDate: '',
   schedule: []
@@ -800,12 +805,13 @@ function renderAddMed() {
   if (existing) {
     _medFormState = {
       format: existing.format || '',
+      customFormat: existing.customFormat || '',
       days: existing.days != null ? [...existing.days] : [0,1,2,3,4,5,6],
       endDate: existing.endDate || '',
       schedule: existing.schedule ? [...existing.schedule] : convertDosageToSchedule(existing.dosage)
     };
   } else {
-    _medFormState = { format: '', days: [0,1,2,3,4,5,6], endDate: '', schedule: [] };
+    _medFormState = { format: '', customFormat: '', days: [0,1,2,3,4,5,6], endDate: '', schedule: [] };
   }
 
   const v = existing || {};
@@ -865,9 +871,18 @@ function renderAddMed() {
 }
 
 function buildFmtGrid() {
-  return FORMATS.map(f =>
+  let html = FORMATS.map(f =>
     `<button class="fmt-btn ${_medFormState.format===f.id?'active':''}" onclick="selectFmt('${f.id}')">${f.icon} ${f.label}</button>`
   ).join('');
+  if (_medFormState.format === 'altro') {
+    html += `<div style="width:100%;margin-top:8px">
+      <input class="form-input" id="f-custom-format"
+        placeholder="${T('es. puff, ml, cerotto, inalazione...','e.g. puff, ml, patch, inhalation...')}"
+        value="${escHtml(_medFormState.customFormat||'')}"
+        oninput="_medFormState.customFormat=this.value">
+    </div>`;
+  }
+  return html;
 }
 
 function buildDaysGrid() {
@@ -988,7 +1003,7 @@ function showMedAutocomplete(val) {
   const matches = D.medicineDb.filter(m => m.name.toLowerCase().includes(val.toLowerCase()));
   if (matches.length === 0) { list.style.display='none'; return; }
   list.innerHTML = matches.slice(0,6).map(m =>
-    `<div class="autocomplete-item" onclick="selectDbMed('${m.id}')">${escHtml(m.name)} <span style="color:var(--t3);font-size:12px">${getFmtLabel(m.format)}</span></div>`
+    `<div class="autocomplete-item" onclick="selectDbMed('${m.id}')">${escHtml(m.name)} <span style="color:var(--t3);font-size:12px">${medFmtLabel(m)}</span></div>`
   ).join('');
   list.style.display = 'block';
 }
@@ -1018,6 +1033,7 @@ function saveMed(existingId) {
     id: existingId || uid(),
     name,
     format: _medFormState.format,
+    customFormat: _medFormState.format === 'altro' ? _medFormState.customFormat.trim() : '',
     schedule: [..._medFormState.schedule],
     days: _medFormState.days.length < 7 ? [..._medFormState.days] : [],
     startDate: start,
@@ -1282,7 +1298,7 @@ function renderDb() {
         <div class="db-item-icon">${getFmtIcon(m.format)}</div>
         <div class="db-item-info">
           <div class="db-item-name">${escHtml(m.name)}</div>
-          <div class="db-item-sub">${getFmtLabel(m.format)}</div>
+          <div class="db-item-sub">${medFmtLabel(m)}</div>
         </div>
         <button class="edit-btn" onclick="navigate('add-db-med',{editDbMedId:'${m.id}'})">${svgIcon('ic-edit',18)}</button>
         <button class="edit-btn" style="color:var(--r)" onclick="confirmDeleteDbMed('${m.id}')">${svgIcon('ic-trash',18)}</button>
@@ -1314,6 +1330,7 @@ function deleteDbMed(id) {
 
 // ── PAGE: Add/Edit DB Medicine ──────────────────────────────
 let _dbFmt = '';
+let _dbCustomFmt = '';
 
 function renderAddDbMed() {
   const existing = S.editDbMedId ? D.medicineDb.find(m => m.id === S.editDbMedId) : null;
@@ -1324,6 +1341,7 @@ function renderAddDbMed() {
     <span class="bar-title">${title}</span>`;
 
   _dbFmt = existing?.format || '';
+  _dbCustomFmt = existing?.customFormat || '';
 
   document.getElementById('content-add-db-med').innerHTML = `
     <div class="form-group">
@@ -1341,9 +1359,18 @@ function renderAddDbMed() {
 }
 
 function buildDbFmtGrid() {
-  return FORMATS.map(f =>
+  let html = FORMATS.map(f =>
     `<button class="fmt-btn ${_dbFmt===f.id?'active':''}" onclick="selectDbFmt('${f.id}')">${f.icon} ${f.label}</button>`
   ).join('');
+  if (_dbFmt === 'altro') {
+    html += `<div style="width:100%;margin-top:8px">
+      <input class="form-input" id="f-db-custom-format"
+        placeholder="${T('es. puff, ml, cerotto...','e.g. puff, ml, patch...')}"
+        value="${escHtml(_dbCustomFmt||'')}"
+        oninput="_dbCustomFmt=this.value">
+    </div>`;
+  }
+  return html;
 }
 
 function selectDbFmt(id) {
@@ -1355,11 +1382,12 @@ function saveDbMed(existingId) {
   const name = g('f-dbname').value.trim();
   if (!name) { alert(T('Inserisci il nome','Enter name')); return; }
 
+  const customFmt = _dbFmt === 'altro' ? _dbCustomFmt.trim() : '';
   if (existingId) {
     const m = D.medicineDb.find(x => x.id === existingId);
-    if (m) { m.name = name; m.format = _dbFmt; }
+    if (m) { m.name = name; m.format = _dbFmt; m.customFormat = customFmt; }
   } else {
-    D.medicineDb.push({ id: uid(), name, format: _dbFmt });
+    D.medicineDb.push({ id: uid(), name, format: _dbFmt, customFormat: customFmt });
   }
   save();
   navigate('db');
@@ -1550,7 +1578,7 @@ function printPatient(id) {
     const st = getMedStatus(med);
     const sched = formatSchedule(med);
     return `<tr>
-      <td><strong>${escHtml(med.name)}</strong><br><small>${getFmtLabel(med.format)}${med.days&&med.days.length>0&&med.days.length<7?' · '+formatDays(med.days):''}</small></td>
+      <td><strong>${escHtml(med.name)}</strong><br><small>${medFmtLabel(med)}${med.days&&med.days.length>0&&med.days.length<7?' · '+formatDays(med.days):''}</small></td>
       <td>${med.totalQty||'—'}</td>
       <td>${sched||'—'}<br><small>${dosePerDay(med)||0}/giorno</small></td>
       <td>${fmtDate(med.startDate)}</td>
