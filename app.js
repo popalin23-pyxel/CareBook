@@ -20,6 +20,24 @@ const FORMATS = [
 ];
 const OP_COLORS = ['#3d9e8c','#e09038','#5b7be0','#d84e6b','#7b5be0','#4a9e4a','#c97b30'];
 
+// ── Firebase ────────────────────────────────────────────────
+const FB_CONFIG = {
+  apiKey: 'AIzaSyBhePhXYLtm2RAyQMpRMb3RsxZD4rc6tz8',
+  authDomain: 'database-ppm.firebaseapp.com',
+  projectId: 'database-ppm',
+  storageBucket: 'database-ppm.firebasestorage.app',
+  messagingSenderId: '232196854704',
+  appId: '1:232196854704:web:a13cc27814a5fe8a477c75'
+};
+firebase.initializeApp(FB_CONFIG);
+const db = firebase.firestore();
+const auth = firebase.auth();
+let _fbUser = null;
+let _fbRole = 'viewer';
+let _fbUnsubData = null;
+function canEdit() { return _fbRole === 'admin'; }
+function sanitizeForFirestore(obj) { return JSON.parse(JSON.stringify(obj)); }
+
 // ── State ───────────────────────────────────────────────────
 const S = {
   page: 'patients',
@@ -55,6 +73,10 @@ function loadData() {
 
 function save() {
   try { localStorage.setItem(LS, JSON.stringify(D)); } catch(e) {}
+  if (_fbUser && canEdit()) {
+    db.collection('appData').doc('main').set(sanitizeForFirestore(D))
+      .catch(err => console.warn('Firestore save failed:', err.code));
+  }
 }
 
 function uid() {
@@ -101,7 +123,8 @@ function back() {
     'calendar': 'patients',
     'db': 'patients',
     'add-db-med': 'db',
-    'settings': 'patients'
+    'settings': 'patients',
+    'register': 'login'
   };
   navigate(map[S.page] || 'patients');
 }
@@ -116,7 +139,9 @@ function renderPage(page) {
     'calendar': renderCalendar,
     'db': renderDb,
     'add-db-med': renderAddDbMed,
-    'settings': renderSettings
+    'settings': renderSettings,
+    'login': renderLogin,
+    'register': renderRegister
   };
   if (renders[page]) renders[page]();
 }
@@ -221,6 +246,190 @@ function nextEndDate(pt) {
     .map(m => m.endDate)
     .sort();
   return ends[0] || null;
+}
+
+// ── Firebase Auth ────────────────────────────────────────────
+async function handleAuthChange(user) {
+  _fbUser = user;
+  if (!user) {
+    if (_fbUnsubData) { _fbUnsubData(); _fbUnsubData = null; }
+    navigate('login');
+    return;
+  }
+  try {
+    const userRef = db.collection('users').doc(user.uid);
+    const userSnap = await userRef.get();
+    if (userSnap.exists) {
+      _fbRole = userSnap.data().role || 'viewer';
+    } else {
+      const usersSnap = await db.collection('users').get();
+      _fbRole = usersSnap.empty ? 'admin' : 'viewer';
+      await userRef.set({ email: user.email, role: _fbRole, createdAt: new Date().toISOString() });
+    }
+  } catch(err) {
+    console.warn('User profile error:', err);
+    _fbRole = 'viewer';
+  }
+  setupFbListeners();
+}
+
+function setupFbListeners() {
+  if (_fbUnsubData) _fbUnsubData();
+  const LIVE_PAGES = ['patients', 'patient-detail', 'calendar', 'db', 'settings'];
+  _fbUnsubData = db.collection('appData').doc('main').onSnapshot(snap => {
+    if (snap.exists) {
+      const data = snap.data();
+      if (data) {
+        D = data;
+        try { localStorage.setItem(LS, JSON.stringify(D)); } catch(e) {}
+      }
+    } else if (canEdit()) {
+      const init = (() => {
+        try {
+          const raw = localStorage.getItem(LS);
+          if (raw) { const p = JSON.parse(raw); if (p?.patients) return p; }
+        } catch(e) {}
+        const opId = uid();
+        return { patients: [], medicineDb: [], operators: [{id:opId, name:'Operatore', color:OP_COLORS[0]}], settings: {language:'it', alertDays:7, activeOperatorId:opId} };
+      })();
+      db.collection('appData').doc('main').set(sanitizeForFirestore(init)).catch(console.error);
+      D = init;
+    }
+    if (S.page === 'login' || S.page === 'register') {
+      navigate('patients');
+      checkPinOnStart();
+    } else if (LIVE_PAGES.includes(S.page)) {
+      renderPage(S.page);
+    }
+  }, err => {
+    console.error('Firestore error:', err);
+    if (S.page === 'login' || S.page === 'register') {
+      navigate('patients');
+      checkPinOnStart();
+    }
+  });
+}
+
+// ── Pages: Login / Register ──────────────────────────────────
+function renderLogin() {
+  const el = g('page-login');
+  if (!el) return;
+  el.innerHTML = `
+    <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px 24px">
+      <div style="width:68px;height:68px;background:var(--pl);border-radius:50%;display:flex;align-items:center;justify-content:center;margin-bottom:20px;font-size:30px">💊</div>
+      <div style="font-size:24px;font-weight:800;margin-bottom:6px;text-align:center">Medicinali Pazienti</div>
+      <div style="font-size:14px;color:var(--t2);margin-bottom:32px;text-align:center">Accedi per continuare</div>
+      <div style="width:100%;max-width:360px">
+        <div class="form-group">
+          <label class="form-label">Email</label>
+          <input class="form-input" id="f-login-email" type="email" placeholder="nome@email.it" autocomplete="email">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Password</label>
+          <input class="form-input" id="f-login-pw" type="password" placeholder="Password" autocomplete="current-password">
+        </div>
+        <div id="login-err" style="color:var(--r);font-size:13px;margin-bottom:10px;min-height:18px"></div>
+        <button class="btn-primary" onclick="doLogin()">Accedi</button>
+        <div style="text-align:center;margin-top:20px;font-size:14px;color:var(--t2)">Non hai un account? <button onclick="navigate('register')" style="background:none;border:none;color:var(--p);font-size:14px;font-weight:600;cursor:pointer">Registrati</button></div>
+      </div>
+    </div>`;
+  setTimeout(() => { g('f-login-pw')?.addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); }); }, 100);
+}
+
+function renderRegister() {
+  const el = g('page-register');
+  if (!el) return;
+  el.innerHTML = `
+    <div class="bar">
+      <button class="bar-back" onclick="navigate('login')">${svgIcon('ic-arrow-left',22)}</button>
+      <span class="bar-title">Crea account</span>
+    </div>
+    <div class="scroll">
+      <div class="form-group">
+        <label class="form-label">Email</label>
+        <input class="form-input" id="f-reg-email" type="email" placeholder="nome@email.it" autocomplete="email">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Password (min 6 caratteri)</label>
+        <input class="form-input" id="f-reg-pw" type="password" placeholder="Password" autocomplete="new-password">
+      </div>
+      <div id="reg-err" style="color:var(--r);font-size:13px;margin-bottom:10px;min-height:18px"></div>
+      <button class="btn-primary" onclick="doRegister()">Crea account</button>
+      <div style="margin-top:14px;font-size:12px;color:var(--t3)">Il primo account creato diventa automaticamente amministratore. I successivi saranno in sola lettura finché un amministratore li promuove.</div>
+    </div>`;
+}
+
+async function doLogin() {
+  const email = g('f-login-email')?.value.trim();
+  const pw = g('f-login-pw')?.value;
+  const errEl = g('login-err');
+  if (!email || !pw) { if (errEl) errEl.textContent = 'Inserisci email e password.'; return; }
+  if (errEl) errEl.textContent = 'Accesso in corso...';
+  try {
+    await auth.signInWithEmailAndPassword(email, pw);
+  } catch(err) {
+    const msgs = { 'auth/user-not-found':'Utente non trovato.', 'auth/wrong-password':'Password errata.', 'auth/invalid-email':'Email non valida.', 'auth/too-many-requests':'Troppi tentativi. Riprova tra poco.', 'auth/invalid-credential':'Email o password non corretti.' };
+    if (errEl) errEl.textContent = msgs[err.code] || 'Errore di accesso. Riprova.';
+  }
+}
+
+async function doRegister() {
+  const email = g('f-reg-email')?.value.trim();
+  const pw = g('f-reg-pw')?.value;
+  const errEl = g('reg-err');
+  if (!email || !pw) { if (errEl) errEl.textContent = 'Inserisci email e password.'; return; }
+  if (errEl) errEl.textContent = 'Creazione account...';
+  try {
+    await auth.createUserWithEmailAndPassword(email, pw);
+  } catch(err) {
+    const msgs = { 'auth/email-already-in-use':'Email già in uso.', 'auth/invalid-email':'Email non valida.', 'auth/weak-password':'Password troppo debole (min 6 caratteri).', 'auth/operation-not-allowed':'Registrazione non abilitata nel progetto Firebase.' };
+    if (errEl) errEl.textContent = msgs[err.code] || 'Errore di registrazione. Riprova.';
+  }
+}
+
+async function doLogout() {
+  if (_fbUnsubData) { _fbUnsubData(); _fbUnsubData = null; }
+  _fbUser = null;
+  _fbRole = 'viewer';
+  await auth.signOut();
+}
+
+async function toggleUserRole(userId, currentRole) {
+  const newRole = currentRole === 'admin' ? 'viewer' : 'admin';
+  try {
+    await db.collection('users').doc(userId).update({ role: newRole });
+    renderSettings();
+  } catch(e) {
+    alert('Errore nel cambio ruolo: ' + e.message);
+  }
+}
+
+async function renderUsersSection() {
+  const placeholder = g('users-sec-placeholder');
+  if (!placeholder) return;
+  try {
+    const snap = await db.collection('users').get();
+    let html = `<div class="settings-sec">
+      <div class="settings-sec-title">GESTIONE UTENTI</div>
+      <div class="settings-sec-desc">Gestisci i ruoli. Amministratore = può modificare i dati. Sola lettura = solo visualizzazione.</div>`;
+    snap.docs.forEach(doc => {
+      const u = doc.data();
+      const isMe = doc.id === _fbUser?.uid;
+      const isAdminUser = u.role === 'admin';
+      html += `<div class="settings-row">
+        <div style="flex:1">
+          <div style="font-size:14px;font-weight:500">${escHtml(u.email)}${isMe ? ' <span style="font-size:11px;color:var(--t3)">(tu)</span>' : ''}</div>
+          <div style="font-size:12px;color:var(--t2);margin-top:2px">${isAdminUser ? '👑 Amministratore' : '👁 Sola lettura'}</div>
+        </div>
+        ${!isMe ? `<button onclick="toggleUserRole('${doc.id}','${u.role}')" class="pill ${isAdminUser ? 'active' : ''}" style="font-size:12px;white-space:nowrap">${isAdminUser ? 'Rimuovi admin' : 'Promuovi'}</button>` : ''}
+      </div>`;
+    });
+    html += '</div>';
+    placeholder.innerHTML = html;
+  } catch(e) {
+    const ph = g('users-sec-placeholder');
+    if (ph) ph.innerHTML = '';
+  }
 }
 
 // ── PAGE: Patients ──────────────────────────────────────────
@@ -329,6 +538,8 @@ function renderPatients() {
   }
 
   document.getElementById('content-patients').innerHTML = html;
+  const patFab = document.querySelector('#page-patients .fab');
+  if (patFab) patFab.style.display = canEdit() ? '' : 'none';
 }
 
 function showOpDropdown() {
@@ -366,8 +577,8 @@ function renderPatientDetail() {
     <div class="bar-icons">
       <button class="ib" onclick="sharePatient('${pt.id}')" title="Condividi">${svgIcon('ic-share')}</button>
       <button class="ib" onclick="printPatient('${pt.id}')" title="Stampa">${svgIcon('ic-print')}</button>
-      <button class="ib" onclick="navigate('add-patient',{editMode:true})" title="Modifica">${svgIcon('ic-edit')}</button>
-      <button class="ib" style="color:var(--r)" onclick="confirmDeletePatient('${pt.id}')" title="Elimina">${svgIcon('ic-trash')}</button>
+      ${canEdit() ? `<button class="ib" onclick="navigate('add-patient',{editMode:true})" title="Modifica">${svgIcon('ic-edit')}</button>` : ''}
+      ${canEdit() ? `<button class="ib" style="color:var(--r)" onclick="confirmDeletePatient('${pt.id}')" title="Elimina">${svgIcon('ic-trash')}</button>` : ''}
     </div>`;
 
   const meds = pt.medicines || [];
@@ -423,9 +634,8 @@ function renderPatientDetail() {
     pastVisits.forEach(v => { html += visitItem(v); });
   }
   if (visits.length === 0) html += `<div class="empty" style="padding:16px 0">${T('Nessuna visita','No visits')}</div>`;
-
-  html += `<button class="add-med-btn" onclick="navigate('add-visit')">+ ${T('Aggiungi visita','Add visit')}</button>
-  </div>`;
+  if (canEdit()) html += `<button class="add-med-btn" onclick="navigate('add-visit')">+ ${T('Aggiungi visita','Add visit')}</button>`;
+  html += `</div>`;
 
   // Medicines
   html += `<div class="section-box">
@@ -448,8 +658,8 @@ function renderPatientDetail() {
   });
 
   if (meds.length === 0) html += `<div class="empty" style="padding:16px 0">${T('Nessun medicinale','No medicines')}</div>`;
-  html += `<button class="add-med-btn" onclick="navigate('add-med',{medId:null})">+ ${T('Aggiungi medicinale','Add medicine')}</button>
-  </div>`;
+  if (canEdit()) html += `<button class="add-med-btn" onclick="navigate('add-med',{medId:null})">+ ${T('Aggiungi medicinale','Add medicine')}</button>`;
+  html += `</div>`;
 
   document.getElementById('content-patient-detail').innerHTML = html;
 }
@@ -468,7 +678,7 @@ function visitItem(v) {
       <div class="visit-sub">${fmtDatetime(v.date)}${v.location?' • '+escHtml(v.location):''}</div>
       ${v.notes ? `<div class="visit-notes">${escHtml(v.notes)}</div>` : ''}
     </div>
-    <button class="ib" onclick="event.stopPropagation();confirmDeleteVisit('${v.id}')">${svgIcon('ic-trash',16)}</button>
+    ${canEdit() ? `<button class="ib" onclick="event.stopPropagation();confirmDeleteVisit('${v.id}')">${svgIcon('ic-trash',16)}</button>` : ''}
   </div>`;
 }
 
@@ -481,7 +691,6 @@ function showMedDetail(medId) {
   const schedStr = formatSchedule(med);
   const restocks = med.restocks || [];
 
-  // Build restock log HTML
   let restockLog = '';
   if (restocks.length > 0) {
     restockLog = `<div style="margin-top:6px;border-top:1px solid var(--br);padding-top:8px">`;
@@ -489,7 +698,7 @@ function showMedDetail(medId) {
       restockLog += `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px">
         <span style="color:var(--p);font-weight:700">+${r.qty}</span>
         <span style="color:var(--t2)">${fmtDate(r.date)}${r.note ? ' · ' + escHtml(r.note) : ''}</span>
-        <button onclick="deleteRestock('${medId}','${r.id}')" style="margin-left:auto;background:none;border:none;color:var(--t3);font-size:16px;cursor:pointer">×</button>
+        ${canEdit() ? `<button onclick="deleteRestock('${medId}','${r.id}')" style="margin-left:auto;background:none;border:none;color:var(--t3);font-size:16px;cursor:pointer">×</button>` : ''}
       </div>`;
     });
     restockLog += `</div>`;
@@ -503,10 +712,10 @@ function showMedDetail(medId) {
           <div style="font-size:18px;font-weight:700">${escHtml(med.name)}</div>
           <div style="font-size:13px;color:var(--t2)">${medFmtLabel(med)}</div>
         </div>
-        <div style="margin-left:auto;display:flex;gap:6px">
+        ${canEdit() ? `<div style="margin-left:auto;display:flex;gap:6px">
           <button class="ib" onclick="closeModal();navigate('add-med',{medId:'${med.id}'})">${svgIcon('ic-edit')}</button>
           <button class="ib" style="color:var(--r)" onclick="closeModal();confirmDeleteMed('${med.id}')">${svgIcon('ic-trash')}</button>
-        </div>
+        </div>` : ''}
       </div>
 
       ${schedStr ? `<div style="font-size:14px;margin-bottom:8px"><strong>${T('Orari:','Schedule:')}</strong> ${schedStr}</div>` : ''}
@@ -522,13 +731,11 @@ function showMedDetail(medId) {
           <span style="font-size:18px;font-weight:800;color:var(--p)">${med.totalQty}</span>
         </div>
         ${restockLog}
-        <button onclick="showRestockForm('${med.id}')" style="width:100%;margin-top:10px;padding:9px;border:1.5px dashed var(--p);border-radius:10px;background:none;color:var(--p);font-size:14px;font-weight:600;cursor:pointer">
-          + ${T('Aggiungi pastiglie','Add pills')}
-        </button>
-      </div>` : `
+        ${canEdit() ? `<button onclick="showRestockForm('${med.id}')" style="width:100%;margin-top:10px;padding:9px;border:1.5px dashed var(--p);border-radius:10px;background:none;color:var(--p);font-size:14px;font-weight:600;cursor:pointer">+ ${T('Aggiungi pastiglie','Add pills')}</button>` : ''}
+      </div>` : canEdit() ? `
       <button onclick="showRestockForm('${med.id}')" style="width:100%;margin-bottom:10px;padding:9px;border:1.5px dashed var(--p);border-radius:10px;background:none;color:var(--p);font-size:14px;font-weight:600;cursor:pointer">
         + ${T('Aggiungi pastiglie','Add pills')}
-      </button>`}
+      </button>` : ''}
 
       <div style="padding:10px;border-radius:10px;background:${st.cls==='expired'?'#fff5f5':st.cls==='low'?'var(--wl)':'var(--pl)'}">
         <span style="font-size:14px;font-weight:600;color:${st.cls==='expired'?'var(--r)':st.cls==='low'?'var(--w)':'var(--p)'}">${st.label||T('In corso','Ongoing')}</span>
@@ -1300,13 +1507,15 @@ function renderDb() {
           <div class="db-item-name">${escHtml(m.name)}</div>
           <div class="db-item-sub">${medFmtLabel(m)}</div>
         </div>
-        <button class="edit-btn" onclick="navigate('add-db-med',{editDbMedId:'${m.id}'})">${svgIcon('ic-edit',18)}</button>
-        <button class="edit-btn" style="color:var(--r)" onclick="confirmDeleteDbMed('${m.id}')">${svgIcon('ic-trash',18)}</button>
+        ${canEdit() ? `<button class="edit-btn" onclick="navigate('add-db-med',{editDbMedId:'${m.id}'})">${svgIcon('ic-edit',18)}</button>` : ''}
+        ${canEdit() ? `<button class="edit-btn" style="color:var(--r)" onclick="confirmDeleteDbMed('${m.id}')">${svgIcon('ic-trash',18)}</button>` : ''}
       </div>`;
     });
   }
 
   document.getElementById('content-db').innerHTML = html;
+  const dbFab = document.querySelector('#page-db .fab');
+  if (dbFab) dbFab.style.display = canEdit() ? '' : 'none';
 }
 
 function confirmDeleteDbMed(id) {
@@ -1397,7 +1606,10 @@ function saveDbMed(existingId) {
 function renderSettings() {
   document.getElementById('bar-settings').innerHTML = `
     <button class="bar-back" onclick="navigate('patients')">${svgIcon('ic-arrow-left',22)}</button>
-    <span class="bar-title">${T('Impostazioni','Settings')}</span>`;
+    <span class="bar-title">${T('Impostazioni','Settings')}</span>
+    <div class="bar-icons">
+      <button class="ib" style="color:var(--r);font-size:12px;font-weight:700;padding:4px 8px" onclick="doLogout()">${T('Esci','Logout')}</button>
+    </div>`;
 
   const lang = D.settings.language;
   const alertDays = D.settings.alertDays;
@@ -1422,6 +1634,17 @@ function renderSettings() {
 
   document.getElementById('content-settings').innerHTML = `
     <div class="settings-sec">
+      <div class="settings-sec-title">ACCOUNT</div>
+      <div class="settings-row">
+        <div style="flex:1">
+          <div style="font-size:14px;font-weight:600">${escHtml(_fbUser?.email||'')}</div>
+          <div style="font-size:12px;color:var(--t2);margin-top:2px">${_fbRole === 'admin' ? '👑 Amministratore' : '👁 Sola lettura'}</div>
+        </div>
+        <button class="pill" style="color:var(--r);border-color:var(--r)" onclick="doLogout()">${T('Esci','Logout')}</button>
+      </div>
+    </div>
+
+    <div class="settings-sec">
       <div class="settings-sec-title">${T('LINGUA','LANGUAGE')}</div>
       <div class="settings-sec-desc">${T('Scegli la lingua dell\'app.','Choose the app language.')}</div>
       <div class="lang-toggle">
@@ -1431,7 +1654,7 @@ function renderSettings() {
       <div style="height:10px"></div>
     </div>
 
-    <div class="settings-sec">
+    ${canEdit() ? `<div class="settings-sec">
       <div class="settings-sec-title">${T('OPERATORI','OPERATORS')}</div>
       <div class="settings-sec-desc">${T('Ogni modifica viene contrassegnata con il nome dell\'operatore attivo.','Each change is marked with the active operator\'s name.')}</div>
       ${opsHtml}
@@ -1442,7 +1665,7 @@ function renderSettings() {
         <div class="color-row" id="color-row">${colorSwatches}</div>
         <button class="btn-primary" onclick="addOperator()">${T('Aggiungi','Add')}</button>
       </div>
-    </div>
+    </div>` : ''}
 
     <div class="settings-sec">
       <div class="settings-sec-title">${T('AVVISO SCORTE','STOCK ALERT')}</div>
@@ -1473,11 +1696,11 @@ function renderSettings() {
         <div class="stat-cell"><div class="stat-num">${totalVisits}</div><div class="stat-label">${T('Visite','Visits')}</div></div>
         <div class="stat-cell"><div class="stat-num">${D.medicineDb.length}</div><div class="stat-label">Database</div></div>
       </div>
-      <div style="padding:12px 16px;font-size:12px;color:var(--t3)">${T('I dati sono salvati solo su questo dispositivo. Disinstallando l\'app li perderai.','Data is saved only on this device. Uninstalling the app will delete it.')}</div>
+      <div style="padding:12px 16px;font-size:12px;color:var(--t3)">${T('I dati sono sincronizzati su Firebase in tempo reale tra tutti gli utenti.','Data is synced on Firebase in real time across all users.')}</div>
       <div style="padding:0 16px 8px;display:flex;flex-direction:column;gap:8px">
         <button class="btn-primary" style="display:flex;align-items:center;justify-content:center;gap:8px" onclick="exportData()">${svgIcon('ic-download',18)} ${T('Esporta backup (.json)','Export backup (.json)')}</button>
-        <button class="btn-secondary" style="display:flex;align-items:center;justify-content:center;gap:8px" onclick="importData()">${svgIcon('ic-upload',18)} ${T('Importa da backup','Import from backup')}</button>
-        <button class="btn-danger" onclick="confirmClearData()">${T('Cancella tutti i dati','Clear all data')}</button>
+        ${canEdit() ? `<button class="btn-secondary" style="display:flex;align-items:center;justify-content:center;gap:8px" onclick="importData()">${svgIcon('ic-upload',18)} ${T('Importa da backup','Import from backup')}</button>
+        <button class="btn-danger" onclick="confirmClearData()">${T('Cancella tutti i dati','Clear all data')}</button>` : ''}
       </div>
     </div>
 
@@ -1497,6 +1720,8 @@ function renderSettings() {
           <button class="btn-primary" style="display:flex;align-items:center;justify-content:center;gap:8px" onclick="showSetPinModal()">${svgIcon('ic-lock',18)} ${T('Imposta PIN','Set PIN')}</button>
         </div>`}
     </div>
+
+    ${canEdit() ? '<div id="users-sec-placeholder"><div class="settings-sec"><div class="settings-sec-title">GESTIONE UTENTI</div><div class="settings-sec-desc" style="padding:10px 16px 12px">Caricamento...</div></div></div>' : ''}
   `;
 
   // Check notification permission
@@ -1504,6 +1729,7 @@ function renderSettings() {
     const el = document.getElementById('notif-status');
     if (el) { el.textContent = T('Attive','Active'); el.style.color = 'var(--p)'; }
   }
+  if (canEdit()) renderUsersSection();
 }
 
 let _selectedOpColor = OP_COLORS[0];
@@ -1912,6 +2138,5 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     }).catch(() => {});
   }
-  renderPatients();
-  checkPinOnStart();
+  auth.onAuthStateChanged(handleAuthChange);
 });
