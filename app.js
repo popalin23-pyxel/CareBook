@@ -137,7 +137,8 @@ function back() {
     'settings': 'patients',
     'search': 'patients',
     'register': 'login',
-    'waiting': 'login'
+    'waiting': 'login',
+    'super-admin': _fbFacilityId ? 'patients' : 'login'
   };
   navigate(map[S.page] || 'patients');
 }
@@ -603,6 +604,7 @@ function renderSuperAdmin() {
   if (!el) return;
   el.innerHTML = `
     <div class="bar">
+      ${_fbFacilityId ? `<button class="bar-back" onclick="navigate('patients')">${svgIcon('ic-arrow-left',22)}</button>` : ''}
       <span class="bar-title" style="flex:1">⚡ Super Admin</span>
       <div class="bar-icons">
         <button class="ib" style="color:var(--r);font-size:12px;font-weight:700" onclick="doLogout()">Esci</button>
@@ -622,6 +624,13 @@ function renderSuperAdmin() {
       <div id="sa-users"><div class="empty">Caricamento...</div></div>
     </div>`;
   loadSuperAdminData();
+}
+
+function superAdminEnterFacility(facilityId, facilityName) {
+  _fbFacilityId = facilityId;
+  _fbFacilityName = facilityName;
+  _fbRole = 'admin';
+  setupFbListeners();
 }
 
 async function loadSuperAdminData() {
@@ -646,6 +655,7 @@ async function loadSuperAdminData() {
               <div style="font-size:15px;font-weight:700">🏥 ${escHtml(f.name)}</div>
               <div style="font-size:12px;color:var(--t2);margin-top:2px">${n} utent${n===1?'e':'i'} assegnat${n===1?'o':'i'}</div>
             </div>
+            <button class="pill active" onclick="superAdminEnterFacility('${f.id}','${escHtml(f.name)}')" style="white-space:nowrap">Accedi</button>
             <button class="ib" style="color:var(--r)" onclick="confirmDeleteFacility('${f.id}','${escHtml(f.name)}')">${svgIcon('ic-trash',18)}</button>
           </div>`;
         }).join('');
@@ -766,9 +776,10 @@ function renderPatients() {
   document.getElementById('bar-patients').innerHTML = `
     <div style="flex:1">
       <div style="font-size:22px;font-weight:800">${T('Pazienti','Patients')}</div>
-      <div style="font-size:13px;color:var(--t2)">${T('Gestisci pazienti e medicinali','Manage patients and medicines')}</div>
+      <div style="font-size:13px;color:var(--t2)">${_fbFacilityName ? `🏥 ${escHtml(_fbFacilityName)}` : T('Gestisci pazienti e medicinali','Manage patients and medicines')}</div>
     </div>
     <div class="bar-icons">
+      ${isSuperAdmin() ? `<button class="ib" onclick="navigate('super-admin')" title="Pannello Admin" style="font-size:18px">⚡</button>` : ''}
       <button class="ib" onclick="navigate('search')" title="Ricerca">${svgIcon('ic-search')}</button>
       <button class="ib" onclick="navigate('calendar')" title="Calendario">${svgIcon('ic-cal')}</button>
       <button class="ib" onclick="navigate('db')" title="Database">${svgIcon('ic-db')}</button>
