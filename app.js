@@ -1569,21 +1569,26 @@ function recalcEnd() {
   }
 }
 
+function builtinMatch(b, q) {
+  return b[0].toLowerCase().includes(q) || (b[3] && b[3].toLowerCase().includes(q));
+}
+
 function showMedAutocomplete(val) {
   const list = document.getElementById('med-autocomplete');
   if (!val || val.length < 1) { list.style.display='none'; return; }
   const q = val.toLowerCase();
-  const custom = D.medicineDb.filter(m => m.name.toLowerCase().includes(q));
+  const custom = D.medicineDb.filter(m => m.name.toLowerCase().includes(q) || (m.fascia||'').includes(q));
   const builtinRaw = (typeof BUILTIN_MEDS !== 'undefined')
-    ? BUILTIN_MEDS.filter(b => b[0].toLowerCase().includes(q)).slice(0, 8 - custom.length)
+    ? BUILTIN_MEDS.filter(b => builtinMatch(b, q)).slice(0, 8 - Math.min(custom.length, 4))
     : [];
   if (custom.length === 0 && builtinRaw.length === 0) { list.style.display='none'; return; }
-  const customHtml = custom.slice(0,6).map(m =>
-    `<div class="autocomplete-item" onclick="selectDbMed('${m.id}')">${escHtml(m.name)}${m.fascia?` <span style="font-size:11px;font-weight:700;color:var(--p)">${m.fascia}</span>`:''} <span style="color:var(--t3);font-size:12px">${medFmtLabel(m)}</span></div>`
+  const customHtml = custom.slice(0, 4).map(m =>
+    `<div class="autocomplete-item" onclick="selectDbMed('${m.id}')">${escHtml(m.name)}${m.fascia ? ` <span style="font-size:11px;font-weight:700;color:var(--p)">${m.fascia}</span>` : ''} <span style="color:var(--t3);font-size:12px">${medFmtLabel(m)}</span></div>`
   ).join('');
-  const builtinHtml = builtinRaw.map((b,i) => {
+  const builtinHtml = builtinRaw.map(b => {
     const idx = BUILTIN_MEDS.indexOf(b);
-    return `<div class="autocomplete-item" onclick="selectDbMed('b:${idx}')">${escHtml(b[0])} <span style="font-size:11px;font-weight:700;color:var(--p)">${b[2]}</span> <span style="color:var(--t3);font-size:12px">${b[1]||''}</span></div>`;
+    const pa = b[3] ? ` <span style="color:var(--t3);font-size:11px">${escHtml(b[3])}</span>` : '';
+    return `<div class="autocomplete-item" onclick="selectDbMed('b:${idx}')">${escHtml(b[0])}${pa} <span style="font-size:11px;font-weight:700;color:var(--p)">${b[2]}</span> <span style="color:var(--t3);font-size:12px">${b[1]||''}</span></div>`;
   }).join('');
   list.innerHTML = customHtml + builtinHtml;
   list.style.display = 'block';
@@ -1896,7 +1901,7 @@ function renderDbList() {
 
   // Built-in medicines (SSN)
   const allBuiltin = (typeof BUILTIN_MEDS !== 'undefined')
-    ? (q ? BUILTIN_MEDS.filter(b => b[0].toLowerCase().includes(q)) : BUILTIN_MEDS)
+    ? (q ? BUILTIN_MEDS.filter(b => builtinMatch(b, q)) : BUILTIN_MEDS)
     : [];
   const page = S.dbPage || 0;
   const PAGE_SIZE = 100;
@@ -1926,7 +1931,7 @@ function renderDbList() {
       <div class="db-item-icon">${getFmtIcon(b[1])}</div>
       <div class="db-item-info">
         <div class="db-item-name">${escHtml(b[0])}${fasciaBadge(b[2])}</div>
-        <div class="db-item-sub">${b[1]||''}</div>
+        <div class="db-item-sub">${b[1]||''}${b[3] ? ` · ${escHtml(b[3])}` : ''}</div>
       </div>
     </div>`).join('')}
     ${hasMore ? `<button class="btn-secondary" style="margin:12px 0" onclick="S.dbPage=(S.dbPage||0)+1;renderDbList()">Mostra altri ${Math.min(PAGE_SIZE, allBuiltin.length - builtin.length)} farmaci...</button>` : ''}
