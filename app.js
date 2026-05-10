@@ -1824,36 +1824,40 @@ function renderDb() {
     <button class="bar-back" onclick="navigate('patients')">${svgIcon('ic-arrow-left',22)}</button>
     <span class="bar-title">${T('Database medicinali','Medicine database')}</span>`;
 
+  document.getElementById('content-db').innerHTML = `
+    <div class="search-wrap">
+      ${svgIcon('ic-search',16)}
+      <input class="search-inp" id="db-search-inp" placeholder="${T('Cerca nel database...','Search database...')}"
+        value="${escHtml(S.dbSearch)}"
+        oninput="S.dbSearch=this.value;renderDbList()">
+    </div>
+    <div id="db-list"></div>`;
+
+  const dbFab = document.querySelector('#page-db .fab');
+  if (dbFab) dbFab.style.display = canEdit() ? '' : 'none';
+  renderDbList();
+}
+
+function renderDbList() {
+  const el = document.getElementById('db-list');
+  if (!el) return;
   const q = S.dbSearch.toLowerCase();
   const items = D.medicineDb.filter(m => !q || m.name.toLowerCase().includes(q))
     .sort((a,b) => a.name.localeCompare(b.name));
 
-  let html = `<div class="search-wrap">
-    ${svgIcon('ic-search',16)}
-    <input class="search-inp" placeholder="${T('Cerca nel database...','Search database...')}"
-      value="${escHtml(S.dbSearch)}"
-      oninput="S.dbSearch=this.value;renderDb()">
-  </div>`;
-
   if (items.length === 0) {
-    html += `<div class="empty">${T('Nessun medicinale nel database','No medicines in database')}</div>`;
-  } else {
-    items.forEach(m => {
-      html += `<div class="db-item">
-        <div class="db-item-icon">${getFmtIcon(m.format)}</div>
-        <div class="db-item-info">
-          <div class="db-item-name">${escHtml(m.name)}</div>
-          <div class="db-item-sub">${medFmtLabel(m)}</div>
-        </div>
-        ${canEdit() ? `<button class="edit-btn" onclick="navigate('add-db-med',{editDbMedId:'${m.id}'})">${svgIcon('ic-edit',18)}</button>` : ''}
-        ${canEdit() ? `<button class="edit-btn" style="color:var(--r)" onclick="confirmDeleteDbMed('${m.id}')">${svgIcon('ic-trash',18)}</button>` : ''}
-      </div>`;
-    });
+    el.innerHTML = `<div class="empty">${T('Nessun medicinale nel database','No medicines in database')}</div>`;
+    return;
   }
-
-  document.getElementById('content-db').innerHTML = html;
-  const dbFab = document.querySelector('#page-db .fab');
-  if (dbFab) dbFab.style.display = canEdit() ? '' : 'none';
+  el.innerHTML = items.map(m => `<div class="db-item">
+    <div class="db-item-icon">${getFmtIcon(m.format)}</div>
+    <div class="db-item-info">
+      <div class="db-item-name">${escHtml(m.name)}</div>
+      <div class="db-item-sub">${medFmtLabel(m)}</div>
+    </div>
+    ${canEdit() ? `<button class="edit-btn" onclick="navigate('add-db-med',{editDbMedId:'${m.id}'})">${svgIcon('ic-edit',18)}</button>` : ''}
+    ${canEdit() ? `<button class="edit-btn" style="color:var(--r)" onclick="confirmDeleteDbMed('${m.id}')">${svgIcon('ic-trash',18)}</button>` : ''}
+  </div>`).join('');
 }
 
 function confirmDeleteDbMed(id) {
