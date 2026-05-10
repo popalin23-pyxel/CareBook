@@ -1548,7 +1548,7 @@ function showMedAutocomplete(val) {
   const matches = D.medicineDb.filter(m => m.name.toLowerCase().includes(val.toLowerCase()));
   if (matches.length === 0) { list.style.display='none'; return; }
   list.innerHTML = matches.slice(0,6).map(m =>
-    `<div class="autocomplete-item" onclick="selectDbMed('${m.id}')">${escHtml(m.name)} <span style="color:var(--t3);font-size:12px">${medFmtLabel(m)}</span></div>`
+    `<div class="autocomplete-item" onclick="selectDbMed('${m.id}')">${escHtml(m.name)}${m.fascia?` <span style="font-size:11px;font-weight:700;color:var(--p)">${m.fascia}</span>`:''} <span style="color:var(--t3);font-size:12px">${medFmtLabel(m)}</span></div>`
   ).join('');
   list.style.display = 'block';
 }
@@ -1852,7 +1852,7 @@ function renderDbList() {
   el.innerHTML = items.map(m => `<div class="db-item">
     <div class="db-item-icon">${getFmtIcon(m.format)}</div>
     <div class="db-item-info">
-      <div class="db-item-name">${escHtml(m.name)}</div>
+      <div class="db-item-name">${escHtml(m.name)}${m.fascia ? ` <span style="font-size:11px;font-weight:700;padding:1px 6px;border-radius:8px;background:var(--pl);color:var(--p);margin-left:4px">${m.fascia}</span>` : ''}</div>
       <div class="db-item-sub">${medFmtLabel(m)}</div>
     </div>
     ${canEdit() ? `<button class="edit-btn" onclick="navigate('add-db-med',{editDbMedId:'${m.id}'})">${svgIcon('ic-edit',18)}</button>` : ''}
@@ -1882,6 +1882,7 @@ function deleteDbMed(id) {
 // ── PAGE: Add/Edit DB Medicine ──────────────────────────────
 let _dbFmt = '';
 let _dbCustomFmt = '';
+let _dbFascia = '';
 
 function renderAddDbMed() {
   const existing = S.editDbMedId ? D.medicineDb.find(m => m.id === S.editDbMedId) : null;
@@ -1904,10 +1905,17 @@ function renderAddDbMed() {
       <label class="form-label">${T('Formato (opzionale)','Format (optional)')}</label>
       <div class="fmt-grid" id="db-fmt-grid">${buildDbFmtGrid()}</div>
     </div>
+    <div class="form-group">
+      <label class="form-label">Fascia SSN</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        ${['','A','C','H','SOP','OTC'].map(f => `<button class="pill ${(existing?.fascia||'')=== f?'active':''}" id="fascia-btn-${f||'none'}" onclick="selectDbFascia('${f}')">${f||'—'}</button>`).join('')}
+      </div>
+      <div style="font-size:12px;color:var(--t2);margin-top:4px">A = rimborsato SSN · C = a carico paziente · H = solo ospedale</div>
+    </div>
     <button class="btn-primary" onclick="saveDbMed(${existing?`'${existing.id}'`:null})">${T('Salva nel database','Save to database')}</button>
     ${existing ? `<button class="btn-danger" onclick="confirmDeleteDbMed('${existing.id}')">${T('Elimina','Delete')}</button>` : ''}
   `;
-}
+  _dbFascia = existing?.fascia || '';
 
 function buildDbFmtGrid() {
   let html = FORMATS.map(f =>
@@ -1929,6 +1937,14 @@ function selectDbFmt(id) {
   document.getElementById('db-fmt-grid').innerHTML = buildDbFmtGrid();
 }
 
+function selectDbFascia(f) {
+  _dbFascia = f;
+  ['','A','C','H','SOP','OTC'].forEach(x => {
+    const btn = document.getElementById('fascia-btn-' + (x||'none'));
+    if (btn) btn.classList.toggle('active', x === f);
+  });
+}
+
 function saveDbMed(existingId) {
   const name = g('f-dbname').value.trim();
   if (!name) { alert(T('Inserisci il nome','Enter name')); return; }
@@ -1936,9 +1952,9 @@ function saveDbMed(existingId) {
   const customFmt = _dbFmt === 'altro' ? _dbCustomFmt.trim() : '';
   if (existingId) {
     const m = D.medicineDb.find(x => x.id === existingId);
-    if (m) { m.name = name; m.format = _dbFmt; m.customFormat = customFmt; }
+    if (m) { m.name = name; m.format = _dbFmt; m.customFormat = customFmt; m.fascia = _dbFascia; }
   } else {
-    D.medicineDb.push({ id: uid(), name, format: _dbFmt, customFormat: customFmt });
+    D.medicineDb.push({ id: uid(), name, format: _dbFmt, customFormat: customFmt, fascia: _dbFascia });
   }
   save();
   navigate('db');
