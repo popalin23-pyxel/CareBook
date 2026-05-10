@@ -453,13 +453,13 @@ function setupFbListeners() {
         D = data;
         try { localStorage.setItem(LS, JSON.stringify(D)); } catch(e) {}
       }
-    } else if (_fbRole === 'admin') {
+    } else if (_fbRole === 'admin' || isSuperAdmin()) {
       const opId = uid();
       const init = { patients: [], medicineDb: [], operators: [{id:opId, name:'Operatore', color:OP_COLORS[0]}], settings: {language:'it', alertDays:7, activeOperatorId:opId} };
       db.collection('appData').doc(_fbFacilityId).set(sanitizeForFirestore(init)).catch(console.error);
       D = init;
     }
-    if (['login', 'register', 'waiting'].includes(S.page)) {
+    if (['login', 'register', 'waiting', 'super-admin'].includes(S.page)) {
       navigate('patients');
       checkPinOnStart();
     } else if (LIVE_PAGES.includes(S.page)) {
@@ -467,7 +467,7 @@ function setupFbListeners() {
     }
   }, err => {
     console.error('Firestore error:', err);
-    if (['login', 'register', 'waiting'].includes(S.page)) navigate('patients');
+    if (['login', 'register', 'waiting', 'super-admin'].includes(S.page)) navigate('patients');
   });
 }
 
