@@ -1545,16 +1545,32 @@ function recalcEnd() {
 function showMedAutocomplete(val) {
   const list = document.getElementById('med-autocomplete');
   if (!val || val.length < 1) { list.style.display='none'; return; }
-  const matches = D.medicineDb.filter(m => m.name.toLowerCase().includes(val.toLowerCase()));
-  if (matches.length === 0) { list.style.display='none'; return; }
-  list.innerHTML = matches.slice(0,6).map(m =>
+  const q = val.toLowerCase();
+  const custom = D.medicineDb.filter(m => m.name.toLowerCase().includes(q));
+  const builtinRaw = (typeof BUILTIN_MEDS !== 'undefined')
+    ? BUILTIN_MEDS.filter(b => b[0].toLowerCase().includes(q)).slice(0, 8 - custom.length)
+    : [];
+  if (custom.length === 0 && builtinRaw.length === 0) { list.style.display='none'; return; }
+  const customHtml = custom.slice(0,6).map(m =>
     `<div class="autocomplete-item" onclick="selectDbMed('${m.id}')">${escHtml(m.name)}${m.fascia?` <span style="font-size:11px;font-weight:700;color:var(--p)">${m.fascia}</span>`:''} <span style="color:var(--t3);font-size:12px">${medFmtLabel(m)}</span></div>`
   ).join('');
+  const builtinHtml = builtinRaw.map((b,i) => {
+    const idx = BUILTIN_MEDS.indexOf(b);
+    return `<div class="autocomplete-item" onclick="selectDbMed('b:${idx}')">${escHtml(b[0])} <span style="font-size:11px;font-weight:700;color:var(--p)">${b[2]}</span> <span style="color:var(--t3);font-size:12px">${b[1]||''}</span></div>`;
+  }).join('');
+  list.innerHTML = customHtml + builtinHtml;
   list.style.display = 'block';
 }
 
 function selectDbMed(id) {
-  const m = D.medicineDb.find(x => x.id === id);
+  let m;
+  if (typeof id === 'string' && id.startsWith('b:')) {
+    const b = BUILTIN_MEDS[parseInt(id.slice(2))];
+    if (!b) return;
+    m = { name: b[0], format: b[1], customFormat: '', fascia: b[2] };
+  } else {
+    m = D.medicineDb.find(x => x.id === id);
+  }
   if (!m) return;
   g('f-med-name').value = m.name;
   _medFormState.format = m.format || '';
@@ -1838,26 +1854,55 @@ function renderDb() {
   renderDbList();
 }
 
+function fasciaBadge(f) {
+  return f ? ` <span style="font-size:11px;font-weight:700;padding:1px 6px;border-radius:8px;background:var(--pl);color:var(--p);margin-left:4px">${f}</span>` : '';
+}
+
 function renderDbList() {
   const el = document.getElementById('db-list');
   if (!el) return;
-  const q = S.dbSearch.toLowerCase();
-  const items = D.medicineDb.filter(m => !q || m.name.toLowerCase().includes(q))
+  const q = S.dbSearch.toLowerCase().trim();
+
+  // Custom medicines (user-added)
+  const custom = D.medicineDb.filter(m => !q || m.name.toLowerCase().includes(q))
     .sort((a,b) => a.name.localeCompare(b.name));
 
-  if (items.length === 0) {
-    el.innerHTML = `<div class="empty">${T('Nessun medicinale nel database','No medicines in database')}</div>`;
+  // Built-in medicines (SSN) - only show when searching
+  const builtin = (q && typeof BUILTIN_MEDS !== 'undefined')
+    ? BUILTIN_MEDS.filter(b => b[0].toLowerCase().includes(q)).slice(0, 50)
+    : [];
+
+  if (custom.length === 0 && builtin.length === 0) {
+    el.innerHTML = q
+      ? `<div class="empty">${T('Nessun risultato','No results')}</div>`
+      : `<div style="padding:16px;font-size:13px;color:var(--t2);text-align:center">Database SSN: ${typeof BUILTIN_MEDS!=='undefined'?BUILTIN_MEDS.length.toLocaleString():0} farmaci disponibili.<br>Inizia a scrivere per cercare.</div>`;
     return;
   }
-  el.innerHTML = items.map(m => `<div class="db-item">
+
+  const customHtml = custom.map(m => `<div class="db-item">
     <div class="db-item-icon">${getFmtIcon(m.format)}</div>
     <div class="db-item-info">
-      <div class="db-item-name">${escHtml(m.name)}${m.fascia ? ` <span style="font-size:11px;font-weight:700;padding:1px 6px;border-radius:8px;background:var(--pl);color:var(--p);margin-left:4px">${m.fascia}</span>` : ''}</div>
+      <div class="db-item-name">${escHtml(m.name)}${fasciaBadge(m.fascia)}</div>
       <div class="db-item-sub">${medFmtLabel(m)}</div>
     </div>
     ${canEdit() ? `<button class="edit-btn" onclick="navigate('add-db-med',{editDbMedId:'${m.id}'})">${svgIcon('ic-edit',18)}</button>` : ''}
     ${canEdit() ? `<button class="edit-btn" style="color:var(--r)" onclick="confirmDeleteDbMed('${m.id}')">${svgIcon('ic-trash',18)}</button>` : ''}
   </div>`).join('');
+
+  const builtinHtml = builtin.length ? `
+    ${q && custom.length ? `<div style="font-size:11px;color:var(--t3);padding:8px 4px 4px;text-transform:uppercase;letter-spacing:.5px">Database SSN</div>` : ''}
+    ${builtin.map((b, i) => {
+      const idx = BUILTIN_MEDS.indexOf(b);
+      return `<div class="db-item" style="opacity:.85">
+        <div class="db-item-icon">${getFmtIcon(b[1])}</div>
+        <div class="db-item-info">
+          <div class="db-item-name">${escHtml(b[0])}${fasciaBadge(b[2])}</div>
+          <div class="db-item-sub">${b[1]||''}</div>
+        </div>
+      </div>`;
+    }).join('')}` : '';
+
+  el.innerHTML = customHtml + builtinHtml;
 }
 
 function confirmDeleteDbMed(id) {
@@ -1916,6 +1961,7 @@ function renderAddDbMed() {
     ${existing ? `<button class="btn-danger" onclick="confirmDeleteDbMed('${existing.id}')">${T('Elimina','Delete')}</button>` : ''}
   `;
   _dbFascia = existing?.fascia || '';
+}
 
 function buildDbFmtGrid() {
   let html = FORMATS.map(f =>
