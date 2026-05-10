@@ -209,17 +209,21 @@ function convertDosageToSchedule(dosage) {
   return r;
 }
 
-function computeEndDate(startIso, totalQty, dpd, weekDays) {
-  // weekDays: array of 0-6 (0=Mon) or null = every day
+function computeEndDate(startIso, totalQty, dpd, weekDays, monthDays) {
   if (!dpd || dpd <= 0 || !totalQty) return null;
   const d = new Date(startIso + 'T00:00:00');
   let rem = totalQty;
   let safety = 0;
   while (rem > 0 && safety < 3650) {
-    const dow = (d.getDay() + 6) % 7; // convert Sun=0 to Mon=0
-    if (!weekDays || weekDays.length === 0 || weekDays.includes(dow)) {
-      rem -= dpd;
+    const dow = (d.getDay() + 6) % 7;
+    const dom = d.getDate();
+    let takes = false;
+    if (monthDays && monthDays.length > 0) {
+      takes = monthDays.includes(dom);
+    } else {
+      takes = !weekDays || weekDays.length === 0 || weekDays.includes(dow);
     }
+    if (takes) rem -= dpd;
     if (rem > 0) d.setDate(d.getDate() + 1);
     safety++;
   }
@@ -1015,7 +1019,7 @@ function renderPatientDetail() {
       <div class="med-icon ${st.cls==='low'||st.cls==='expired'?'low':''}">${getFmtIcon(med.format)}</div>
       <div class="med-info">
         <div class="med-name">${escHtml(med.name)}</div>
-        <div class="med-sub">${medFmtLabel(med)||''}${med.days&&med.days.length>0&&med.days.length<7?' · '+formatDays(med.days):''}${formatSchedule(med)?' · '+formatSchedule(med):dpd?' · '+dpd+'/'+T('giorno','day'):''}</div>
+        <div class="med-sub">${medFmtLabel(med)||''}${med.monthDays&&med.monthDays.length>0?' · '+formatMonthDays(med.monthDays):med.days&&med.days.length>0&&med.days.length<7?' · '+formatDays(med.days):''}${formatSchedule(med)?' · '+formatSchedule(med):dpd?' · '+dpd+'/'+T('giorno','day'):''}</div>
       </div>
       <span class="med-status ${st.cls}">${st.label}</span>
       ${svgIcon('ic-chevron', 16)}
@@ -1085,7 +1089,7 @@ function showMedDetail(medId) {
 
       ${schedStr ? `<div style="font-size:14px;margin-bottom:8px"><strong>${T('Orari:','Schedule:')}</strong> ${schedStr}</div>` : ''}
       ${dpd ? `<div style="font-size:14px;margin-bottom:8px"><strong>${T('Totale/giorno:','Per day:')}</strong> ${dpd}</div>` : ''}
-      ${med.days&&med.days.length>0&&med.days.length<7 ? `<div style="font-size:14px;margin-bottom:8px"><strong>${T('Giorni:','Days:')}</strong> ${formatDays(med.days)}</div>` : ''}
+      ${med.monthDays&&med.monthDays.length>0 ? `<div style="font-size:14px;margin-bottom:8px"><strong>${T('Giorni:','Days:')}</strong> ${formatMonthDays(med.monthDays)}</div>` : med.days&&med.days.length>0&&med.days.length<7 ? `<div style="font-size:14px;margin-bottom:8px"><strong>${T('Giorni:','Days:')}</strong> ${formatDays(med.days)}</div>` : ''}
       ${med.startDate ? `<div style="font-size:14px;margin-bottom:8px"><strong>${T('Inizio:','Start:')}</strong> ${fmtDate(med.startDate)}</div>` : ''}
       ${med.endDate ? `<div style="font-size:14px;margin-bottom:8px"><strong>${T('Fine prevista:','Expected end:')}</strong> ${fmtDate(med.endDate)}</div>` : ''}
 
@@ -1162,7 +1166,8 @@ function saveRestock(medId) {
   const dpd = dosePerDay(med);
   if (med.startDate && dpd) {
     const weekDays = med.days && med.days.length > 0 && med.days.length < 7 ? med.days : null;
-    med.endDate = computeEndDate(med.startDate, med.totalQty, dpd, weekDays);
+    const mDays = med.monthDays && med.monthDays.length > 0 ? med.monthDays : null;
+    med.endDate = computeEndDate(med.startDate, med.totalQty, dpd, mDays ? null : weekDays, mDays);
   }
 
   save();
@@ -1182,11 +1187,18 @@ function deleteRestock(medId, restockId) {
   const dpd = dosePerDay(med);
   if (med.startDate && dpd && med.totalQty > 0) {
     const weekDays = med.days && med.days.length > 0 && med.days.length < 7 ? med.days : null;
-    med.endDate = computeEndDate(med.startDate, med.totalQty, dpd, weekDays);
+    const mDays = med.monthDays && med.monthDays.length > 0 ? med.monthDays : null;
+    med.endDate = computeEndDate(med.startDate, med.totalQty, dpd, mDays ? null : weekDays, mDays);
   }
   save();
   closeModal();
   showMedDetail(medId);
+}
+
+function formatMonthDays(monthDays) {
+  if (!monthDays || monthDays.length === 0) return '';
+  const sorted = [...monthDays].sort((a,b)=>a-b);
+  return T(`Ogni mese: ${sorted.join(', ')}`, `Monthly: ${sorted.join(', ')}`);
 }
 
 function formatDays(days) {
@@ -1361,6 +1373,8 @@ let _medFormState = {
   format: '',
   customFormat: '',
   days: [0,1,2,3,4,5,6],
+  monthDays: [],
+  dayMode: 'week',
   endDate: '',
   schedule: []
 };
@@ -1379,11 +1393,13 @@ function renderAddMed() {
       format: existing.format || '',
       customFormat: existing.customFormat || '',
       days: existing.days != null ? [...existing.days] : [0,1,2,3,4,5,6],
+      monthDays: existing.monthDays ? [...existing.monthDays] : [],
+      dayMode: existing.monthDays && existing.monthDays.length > 0 ? 'month' : 'week',
       endDate: existing.endDate || '',
       schedule: existing.schedule ? [...existing.schedule] : convertDosageToSchedule(existing.dosage)
     };
   } else {
-    _medFormState = { format: '', customFormat: '', days: [0,1,2,3,4,5,6], endDate: '', schedule: [] };
+    _medFormState = { format: '', customFormat: '', days: [0,1,2,3,4,5,6], monthDays: [], dayMode: 'week', endDate: '', schedule: [] };
   }
 
   const v = existing || {};
@@ -1411,10 +1427,11 @@ function renderAddMed() {
 
     <div class="form-group">
       <label class="form-label">${T('Giorni di assunzione','Days of intake')}</label>
-      <div style="margin-bottom:8px">
-        <button class="pill ${_medFormState.days.length===7?'active':''}" onclick="setAllDays()">${T('Ogni giorno','Every day')}</button>
+      <div style="display:flex;gap:8px;margin-bottom:12px">
+        <button class="pill ${_medFormState.dayMode==='week'?'active':''}" onclick="setDayMode('week')">${T('Giorni settimana','Weekdays')}</button>
+        <button class="pill ${_medFormState.dayMode==='month'?'active':''}" onclick="setDayMode('month')">${T('Giorni del mese','Month days')}</button>
       </div>
-      <div class="days-grid" id="days-grid">${buildDaysGrid()}</div>
+      <div id="days-selector">${buildDaysSelector()}</div>
     </div>
 
     <div class="form-row">
@@ -1457,10 +1474,54 @@ function buildFmtGrid() {
   return html;
 }
 
-function buildDaysGrid() {
-  return DAYS_IT.map((day, i) =>
-    `<button class="day-btn ${_medFormState.days.includes(i)?'active':''}" onclick="toggleDay(${i})">${day}</button>`
-  ).join('');
+function buildDaysSelector() {
+  if (_medFormState.dayMode === 'month') {
+    const days31 = Array.from({length:31},(_,i)=>i+1);
+    return `<div style="margin-bottom:6px">
+      <button class="pill" onclick="selectMonthDays('bisettimanale')" style="font-size:11px;margin-right:4px;margin-bottom:4px">15+30</button>
+      <button class="pill" onclick="selectMonthDays('quindicinale')" style="font-size:11px;margin-right:4px;margin-bottom:4px">1+15</button>
+      <button class="pill" onclick="clearMonthDays()" style="font-size:11px;color:var(--r);border-color:var(--r);margin-bottom:4px">${T('Cancella','Clear')}</button>
+    </div>
+    <div class="days-grid" style="grid-template-columns:repeat(7,1fr)" id="days-grid">
+      ${days31.map(d=>`<button class="day-btn ${_medFormState.monthDays.includes(d)?'active':''}" onclick="toggleMonthDay(${d})" style="font-size:12px">${d}</button>`).join('')}
+    </div>
+    <div style="font-size:12px;color:var(--t2);margin-top:6px">${_medFormState.monthDays.length>0?T(`Ogni mese: giorno ${[..._medFormState.monthDays].sort((a,b)=>a-b).join(', ')}`,`Monthly: day ${[..._medFormState.monthDays].sort((a,b)=>a-b).join(', ')}`):T('Seleziona i giorni del mese','Select days of the month')}</div>`;
+  }
+  return `<div style="margin-bottom:6px">
+    <button class="pill ${_medFormState.days.length===7?'active':''}" onclick="setAllDays()">${T('Ogni giorno','Every day')}</button>
+  </div>
+  <div class="days-grid" id="days-grid">${DAYS_IT.map((day,i)=>`<button class="day-btn ${_medFormState.days.includes(i)?'active':''}" onclick="toggleDay(${i})">${day}</button>`).join('')}</div>`;
+}
+
+function setDayMode(mode) {
+  _medFormState.dayMode = mode;
+  document.getElementById('days-selector').innerHTML = buildDaysSelector();
+  document.querySelectorAll('#content-add-med .pill').forEach(b => {
+    if (b.textContent.includes(T('Giorni settimana','Weekdays'))) b.classList.toggle('active', mode==='week');
+    if (b.textContent.includes(T('Giorni del mese','Month days'))) b.classList.toggle('active', mode==='month');
+  });
+  recalcEnd();
+}
+
+function toggleMonthDay(d) {
+  const idx = _medFormState.monthDays.indexOf(d);
+  if (idx >= 0) _medFormState.monthDays.splice(idx, 1);
+  else _medFormState.monthDays.push(d);
+  document.getElementById('days-selector').innerHTML = buildDaysSelector();
+  recalcEnd();
+}
+
+function clearMonthDays() {
+  _medFormState.monthDays = [];
+  document.getElementById('days-selector').innerHTML = buildDaysSelector();
+  recalcEnd();
+}
+
+function selectMonthDays(preset) {
+  if (preset === 'bisettimanale') _medFormState.monthDays = [15, 30];
+  else if (preset === 'quindicinale') _medFormState.monthDays = [1, 15];
+  document.getElementById('days-selector').innerHTML = buildDaysSelector();
+  recalcEnd();
 }
 
 function selectFmt(id) {
@@ -1562,7 +1623,8 @@ function recalcEnd() {
   const dpd = _medFormState.schedule.reduce((s, t) => s + (t.qty || 0), 0);
   if (!start || !qty || !dpd) return;
   const days = _medFormState.days.length === 7 ? null : _medFormState.days;
-  const end = computeEndDate(start, qty, dpd, days);
+  const monthDays = _medFormState.dayMode === 'month' && _medFormState.monthDays.length > 0 ? _medFormState.monthDays : null;
+  const end = computeEndDate(start, qty, dpd, monthDays ? null : days, monthDays);
   if (end) {
     g('f-end').value = end;
     _medFormState.endDate = end;
@@ -1628,7 +1690,8 @@ function saveMed(existingId) {
     format: _medFormState.format,
     customFormat: _medFormState.format === 'altro' ? _medFormState.customFormat.trim() : '',
     schedule: [..._medFormState.schedule],
-    days: _medFormState.days.length < 7 ? [..._medFormState.days] : [],
+    days: _medFormState.dayMode === 'week' && _medFormState.days.length < 7 ? [..._medFormState.days] : [],
+    monthDays: _medFormState.dayMode === 'month' ? [..._medFormState.monthDays] : [],
     startDate: start,
     endDate: g('f-end').value || _medFormState.endDate || null,
     totalQty: qty,
@@ -2244,7 +2307,7 @@ function printPatient(id) {
     const st = getMedStatus(med);
     const sched = formatSchedule(med);
     return `<tr>
-      <td><strong>${escHtml(med.name)}</strong><br><small>${medFmtLabel(med)}${med.days&&med.days.length>0&&med.days.length<7?' · '+formatDays(med.days):''}</small></td>
+      <td><strong>${escHtml(med.name)}</strong><br><small>${medFmtLabel(med)}${med.monthDays&&med.monthDays.length>0?' · '+formatMonthDays(med.monthDays):med.days&&med.days.length>0&&med.days.length<7?' · '+formatDays(med.days):''}</small></td>
       <td>${med.totalQty||'—'}</td>
       <td>${sched||'—'}<br><small>${dosePerDay(med)||0}/giorno</small></td>
       <td>${fmtDate(med.startDate)}</td>
