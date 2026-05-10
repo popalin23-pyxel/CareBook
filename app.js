@@ -35,7 +35,17 @@ const auth = firebase.auth();
 let _fbUser = null;
 let _fbRole = 'viewer';
 let _fbUnsubData = null;
-function canEdit() { return _fbRole === 'admin'; }
+let _fbFacilityId = null;
+let _fbFacilityName = '';
+const SUPER_ADMIN_EMAIL = 'popalin23@gmail.com';
+const ROLE_LABELS = {
+  'superadmin': '⚡ Super Admin',
+  'admin': '👑 Amministratore',
+  'nurse-write': '✍️ Infermiere (lettura+scrittura)',
+  'nurse-read': '👁 Infermiere (sola lettura)'
+};
+function isSuperAdmin() { return _fbUser?.email === SUPER_ADMIN_EMAIL; }
+function canEdit() { return _fbRole === 'admin' || _fbRole === 'nurse-write'; }
 function sanitizeForFirestore(obj) { return JSON.parse(JSON.stringify(obj)); }
 
 // ── State ───────────────────────────────────────────────────
@@ -74,8 +84,8 @@ function loadData() {
 
 function save() {
   try { localStorage.setItem(LS, JSON.stringify(D)); } catch(e) {}
-  if (_fbUser && canEdit()) {
-    db.collection('appData').doc('main').set(sanitizeForFirestore(D))
+  if (_fbUser && canEdit() && _fbFacilityId) {
+    db.collection('appData').doc(_fbFacilityId).set(sanitizeForFirestore(D))
       .catch(err => console.warn('Firestore save failed:', err.code));
   }
 }
@@ -126,7 +136,8 @@ function back() {
     'add-db-med': 'db',
     'settings': 'patients',
     'search': 'patients',
-    'register': 'login'
+    'register': 'login',
+    'waiting': 'login'
   };
   navigate(map[S.page] || 'patients');
 }
@@ -143,6 +154,8 @@ function renderPage(page) {
     'add-db-med': renderAddDbMed,
     'settings': renderSettings,
     'search': renderSearch,
+    'waiting': renderWaiting,
+    'super-admin': renderSuperAdmin,
     'login': renderLogin,
     'register': renderRegister
   };
@@ -395,46 +408,57 @@ async function handleAuthChange(user) {
     navigate('login');
     return;
   }
+  // Super admin bypassa tutto
+  if (user.email === SUPER_ADMIN_EMAIL) {
+    _fbRole = 'superadmin';
+    _fbFacilityId = null;
+    _fbFacilityName = '';
+    navigate('super-admin');
+    return;
+  }
   try {
     const userRef = db.collection('users').doc(user.uid);
     const userSnap = await userRef.get();
-    if (userSnap.exists) {
-      _fbRole = userSnap.data().role || 'viewer';
+    if (!userSnap.exists) {
+      await userRef.set({ email: user.email, role: 'nurse-read', facilityId: null, createdAt: new Date().toISOString() });
+      _fbRole = 'nurse-read';
+      _fbFacilityId = null;
     } else {
-      const usersSnap = await db.collection('users').get();
-      _fbRole = usersSnap.empty ? 'admin' : 'viewer';
-      await userRef.set({ email: user.email, role: _fbRole, createdAt: new Date().toISOString() });
+      const data = userSnap.data();
+      _fbRole = data.role || 'nurse-read';
+      _fbFacilityId = data.facilityId || null;
     }
   } catch(err) {
     console.warn('User profile error:', err);
-    _fbRole = 'viewer';
+    _fbRole = 'nurse-read';
+    _fbFacilityId = null;
   }
+  if (!_fbFacilityId) { navigate('waiting'); return; }
+  try {
+    const facSnap = await db.collection('facilities').doc(_fbFacilityId).get();
+    _fbFacilityName = facSnap.exists ? facSnap.data().name : '';
+  } catch(e) { _fbFacilityName = ''; }
   setupFbListeners();
 }
 
 function setupFbListeners() {
   if (_fbUnsubData) _fbUnsubData();
-  const LIVE_PAGES = ['patients', 'patient-detail', 'calendar', 'db', 'settings'];
-  _fbUnsubData = db.collection('appData').doc('main').onSnapshot(snap => {
+  if (!_fbFacilityId) return;
+  const LIVE_PAGES = ['patients', 'patient-detail', 'calendar', 'db', 'settings', 'search'];
+  _fbUnsubData = db.collection('appData').doc(_fbFacilityId).onSnapshot(snap => {
     if (snap.exists) {
       const data = snap.data();
       if (data) {
         D = data;
         try { localStorage.setItem(LS, JSON.stringify(D)); } catch(e) {}
       }
-    } else if (canEdit()) {
-      const init = (() => {
-        try {
-          const raw = localStorage.getItem(LS);
-          if (raw) { const p = JSON.parse(raw); if (p?.patients) return p; }
-        } catch(e) {}
-        const opId = uid();
-        return { patients: [], medicineDb: [], operators: [{id:opId, name:'Operatore', color:OP_COLORS[0]}], settings: {language:'it', alertDays:7, activeOperatorId:opId} };
-      })();
-      db.collection('appData').doc('main').set(sanitizeForFirestore(init)).catch(console.error);
+    } else if (_fbRole === 'admin') {
+      const opId = uid();
+      const init = { patients: [], medicineDb: [], operators: [{id:opId, name:'Operatore', color:OP_COLORS[0]}], settings: {language:'it', alertDays:7, activeOperatorId:opId} };
+      db.collection('appData').doc(_fbFacilityId).set(sanitizeForFirestore(init)).catch(console.error);
       D = init;
     }
-    if (S.page === 'login' || S.page === 'register') {
+    if (['login', 'register', 'waiting'].includes(S.page)) {
       navigate('patients');
       checkPinOnStart();
     } else if (LIVE_PAGES.includes(S.page)) {
@@ -442,10 +466,7 @@ function setupFbListeners() {
     }
   }, err => {
     console.error('Firestore error:', err);
-    if (S.page === 'login' || S.page === 'register') {
-      navigate('patients');
-      checkPinOnStart();
-    }
+    if (['login', 'register', 'waiting'].includes(S.page)) navigate('patients');
   });
 }
 
@@ -552,34 +573,181 @@ async function doLogout() {
   await auth.signOut();
 }
 
-async function toggleUserRole(userId, currentRole) {
-  const newRole = currentRole === 'admin' ? 'viewer' : 'admin';
+// ── Pagina: In attesa di accesso ────────────────────────────
+function renderWaiting() {
+  const el = g('page-waiting');
+  if (!el) return;
+  el.innerHTML = `
+    <div class="bar">
+      <span class="bar-title" style="flex:1">CareBook</span>
+      <div class="bar-icons">
+        <button class="ib" style="color:var(--r);font-size:12px;font-weight:700" onclick="doLogout()">Esci</button>
+      </div>
+    </div>
+    <div class="scroll" style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:70vh;text-align:center">
+      <div style="font-size:52px;margin-bottom:16px">🏥</div>
+      <div style="font-size:20px;font-weight:800;margin-bottom:10px">Account in attesa</div>
+      <div style="font-size:14px;color:var(--t2);max-width:300px;line-height:1.6;margin-bottom:8px">
+        Sei loggato come<br><strong>${escHtml(_fbUser?.email||'')}</strong>
+      </div>
+      <div style="font-size:14px;color:var(--t2);max-width:300px;line-height:1.6;margin-bottom:28px">
+        Il tuo account non è ancora stato assegnato a nessuna struttura.<br>Contatta l'amministratore.
+      </div>
+      <button class="btn-danger" style="width:auto;padding:12px 28px" onclick="doLogout()">Esci</button>
+    </div>`;
+}
+
+// ── Pagina: Super Admin ──────────────────────────────────────
+function renderSuperAdmin() {
+  const el = g('page-super-admin');
+  if (!el) return;
+  el.innerHTML = `
+    <div class="bar">
+      <span class="bar-title" style="flex:1">⚡ Super Admin</span>
+      <div class="bar-icons">
+        <button class="ib" style="color:var(--r);font-size:12px;font-weight:700" onclick="doLogout()">Esci</button>
+      </div>
+    </div>
+    <div class="scroll">
+      <div class="sec-hd">STRUTTURE DI LAVORO</div>
+      <div id="sa-facilities"><div class="empty">Caricamento...</div></div>
+
+      <div class="section-box" style="margin-top:8px">
+        <div style="font-size:15px;font-weight:700;margin-bottom:12px">+ Nuova struttura</div>
+        <input class="form-input" id="f-new-facility" placeholder="es. Casa Famiglia Rossi, RSA Villa Verde...">
+        <button class="btn-primary" style="margin-top:10px" onclick="createFacility()">Crea struttura</button>
+      </div>
+
+      <div class="sec-hd" style="margin-top:20px">GESTIONE UTENTI</div>
+      <div id="sa-users"><div class="empty">Caricamento...</div></div>
+    </div>`;
+  loadSuperAdminData();
+}
+
+async function loadSuperAdminData() {
+  try {
+    const [facSnap, usersSnap] = await Promise.all([
+      db.collection('facilities').get(),
+      db.collection('users').get()
+    ]);
+    const facilities = facSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const users = usersSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+    // Strutture
+    const facEl = g('sa-facilities');
+    if (facEl) {
+      if (!facilities.length) {
+        facEl.innerHTML = '<div class="empty">Nessuna struttura. Creane una qui sotto.</div>';
+      } else {
+        facEl.innerHTML = facilities.map(f => {
+          const n = users.filter(u => u.facilityId === f.id).length;
+          return `<div class="section-box" style="margin-bottom:8px;display:flex;align-items:center;gap:12px">
+            <div style="flex:1">
+              <div style="font-size:15px;font-weight:700">🏥 ${escHtml(f.name)}</div>
+              <div style="font-size:12px;color:var(--t2);margin-top:2px">${n} utent${n===1?'e':'i'} assegnat${n===1?'o':'i'}</div>
+            </div>
+            <button class="ib" style="color:var(--r)" onclick="confirmDeleteFacility('${f.id}','${escHtml(f.name)}')">${svgIcon('ic-trash',18)}</button>
+          </div>`;
+        }).join('');
+      }
+    }
+
+    // Utenti
+    const usersEl = g('sa-users');
+    if (usersEl) {
+      const facOpts = facilities.map(f => `<option value="${f.id}">${escHtml(f.name)}</option>`).join('');
+      if (!users.length) {
+        usersEl.innerHTML = '<div class="empty">Nessun utente registrato.</div>';
+      } else {
+        usersEl.innerHTML = users.map(u => `
+          <div class="section-box" style="margin-bottom:8px" id="user-card-${u.id}">
+            <div style="font-size:13px;font-weight:600;margin-bottom:8px">${escHtml(u.email)}</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <select id="fac-${u.id}" class="form-input" style="flex:1;min-width:140px;padding:8px 10px;font-size:13px">
+                <option value="">— Nessuna struttura —</option>
+                ${facOpts}
+              </select>
+              <select id="role-${u.id}" class="form-input" style="flex:1;min-width:140px;padding:8px 10px;font-size:13px">
+                <option value="admin">👑 Amministratore</option>
+                <option value="nurse-write">✍️ Infermiere (R+W)</option>
+                <option value="nurse-read">👁 Infermiere (sola lettura)</option>
+              </select>
+              <button class="pill active" onclick="saveUserAssignment('${u.id}')" style="white-space:nowrap;align-self:center" id="btn-${u.id}">Salva</button>
+            </div>
+          </div>`).join('');
+        // Set current values
+        setTimeout(() => users.forEach(u => {
+          const fs = g(`fac-${u.id}`); const rs = g(`role-${u.id}`);
+          if (fs && u.facilityId) fs.value = u.facilityId;
+          if (rs && u.role) rs.value = u.role;
+        }), 80);
+      }
+    }
+  } catch(e) {
+    console.error('loadSuperAdminData:', e);
+  }
+}
+
+async function createFacility() {
+  const name = g('f-new-facility')?.value.trim();
+  if (!name) { alert('Inserisci il nome della struttura.'); return; }
+  try {
+    const id = uid();
+    await db.collection('facilities').doc(id).set({ id, name, createdAt: new Date().toISOString(), createdBy: _fbUser.uid });
+    g('f-new-facility').value = '';
+    renderSuperAdmin();
+  } catch(e) { alert('Errore: ' + e.message); }
+}
+
+function confirmDeleteFacility(facilityId, name) {
+  if (!confirm(`Eliminare la struttura "${name}"?\n\nI dati dei pazienti e medicinali verranno persi definitivamente!`)) return;
+  Promise.all([
+    db.collection('facilities').doc(facilityId).delete(),
+    db.collection('appData').doc(facilityId).delete().catch(() => {})
+  ]).then(() => renderSuperAdmin()).catch(e => alert('Errore: ' + e.message));
+}
+
+async function saveUserAssignment(userId) {
+  const facilityId = g(`fac-${userId}`)?.value || null;
+  const role = g(`role-${userId}`)?.value || 'nurse-read';
+  const btn = g(`btn-${userId}`);
+  try {
+    await db.collection('users').doc(userId).update({ facilityId: facilityId || null, role });
+    if (btn) { btn.textContent = '✓ Salvato'; setTimeout(() => { btn.textContent = 'Salva'; }, 1500); }
+  } catch(e) { alert('Errore: ' + e.message); }
+}
+
+// ── Gestione utenti per admin struttura ──────────────────────
+async function changeUserRole(userId, newRole) {
   try {
     await db.collection('users').doc(userId).update({ role: newRole });
-    renderSettings();
-  } catch(e) {
-    alert('Errore nel cambio ruolo: ' + e.message);
-  }
+  } catch(e) { alert('Errore: ' + e.message); }
 }
 
 async function renderUsersSection() {
   const placeholder = g('users-sec-placeholder');
   if (!placeholder) return;
   try {
-    const snap = await db.collection('users').get();
+    const snap = await db.collection('users').where('facilityId', '==', _fbFacilityId).get();
     let html = `<div class="settings-sec">
-      <div class="settings-sec-title">GESTIONE UTENTI</div>
-      <div class="settings-sec-desc">Gestisci i ruoli. Amministratore = può modificare i dati. Sola lettura = solo visualizzazione.</div>`;
+      <div class="settings-sec-title">UTENTI STRUTTURA</div>
+      <div class="settings-sec-desc">Cambia il ruolo degli utenti assegnati a questa struttura. Per aggiungere/rimuovere utenti contatta il Super Admin.</div>`;
+    if (snap.empty) {
+      html += '<div class="settings-row" style="color:var(--t3);font-size:13px">Nessun utente trovato.</div>';
+    }
     snap.docs.forEach(doc => {
       const u = doc.data();
       const isMe = doc.id === _fbUser?.uid;
-      const isAdminUser = u.role === 'admin';
       html += `<div class="settings-row">
         <div style="flex:1">
           <div style="font-size:14px;font-weight:500">${escHtml(u.email)}${isMe ? ' <span style="font-size:11px;color:var(--t3)">(tu)</span>' : ''}</div>
-          <div style="font-size:12px;color:var(--t2);margin-top:2px">${isAdminUser ? '👑 Amministratore' : '👁 Sola lettura'}</div>
+          <div style="font-size:12px;color:var(--t2);margin-top:2px">${ROLE_LABELS[u.role]||u.role}</div>
         </div>
-        ${!isMe ? `<button onclick="toggleUserRole('${doc.id}','${u.role}')" class="pill ${isAdminUser ? 'active' : ''}" style="font-size:12px;white-space:nowrap">${isAdminUser ? 'Rimuovi admin' : 'Promuovi'}</button>` : ''}
+        ${!isMe ? `<select onchange="changeUserRole('${doc.id}',this.value)" class="form-input" style="width:auto;padding:6px 8px;font-size:12px;flex-shrink:0">
+          <option value="admin" ${u.role==='admin'?'selected':''}>👑 Admin</option>
+          <option value="nurse-write" ${u.role==='nurse-write'?'selected':''}>✍️ Inf. (R+W)</option>
+          <option value="nurse-read" ${u.role==='nurse-read'?'selected':''}>👁 Inf. (solo lettura)</option>
+        </select>` : ''}
       </div>`;
     });
     html += '</div>';
@@ -1797,7 +1965,8 @@ function renderSettings() {
       <div class="settings-row">
         <div style="flex:1">
           <div style="font-size:14px;font-weight:600">${escHtml(_fbUser?.email||'')}</div>
-          <div style="font-size:12px;color:var(--t2);margin-top:2px">${_fbRole === 'admin' ? '👑 Amministratore' : '👁 Sola lettura'}</div>
+          <div style="font-size:12px;color:var(--t2);margin-top:2px">${ROLE_LABELS[_fbRole] || _fbRole}</div>
+          ${_fbFacilityName ? `<div style="font-size:12px;color:var(--p);margin-top:1px">🏥 ${escHtml(_fbFacilityName)}</div>` : ''}
         </div>
         <button class="pill" style="color:var(--r);border-color:var(--r)" onclick="doLogout()">${T('Esci','Logout')}</button>
       </div>
