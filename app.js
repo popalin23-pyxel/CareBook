@@ -62,6 +62,7 @@ const S = {
   calDate: new Date(),
   calSelected: new Date(),
   dbSearch: '',
+  dbPage: 0,
   searchGlobal: ''
 };
 
@@ -817,22 +818,50 @@ function renderPatients() {
 
     <div class="search-wrap">
       ${svgIcon('ic-search', 16)}
-      <input class="search-inp" placeholder="${T('Cerca per nome, stanza o medico...','Search by name, room or doctor...')}"
+      <input class="search-inp" id="patients-search-inp" placeholder="${T('Cerca per nome, stanza o medico...','Search by name, room or doctor...')}"
         value="${escHtml(S.search)}"
-        oninput="S.search=this.value;renderPatients()">
+        oninput="S.search=this.value;renderPatientsList()">
     </div>
 
     <div class="pills">
       <span class="pill-label">${T('Ordina:','Sort:')}</span>
-      <button class="pill ${S.sort==='nome'?'active':''}" onclick="S.sort='nome';renderPatients()">${T('Nome','Name')}</button>
-      <button class="pill ${S.sort==='stanza'?'active':''}" onclick="S.sort='stanza'">${T('Stanza','Room')}</button>
-      <button class="pill ${S.sort==='avvisi'?'active':''}" onclick="S.sort='avvisi'">${T('Avvisi','Alerts')}</button>
-      <button class="pill ${S.filterAlerts?'active':''}" onclick="S.filterAlerts=!S.filterAlerts;renderPatients()" style="margin-left:auto">${T('Solo avvisi','Only alerts')}</button>
-    </div>`;
+      <button class="pill ${S.sort==='nome'?'active':''}" onclick="S.sort='nome';renderPatientsList()">${T('Nome','Name')}</button>
+      <button class="pill ${S.sort==='stanza'?'active':''}" onclick="S.sort='stanza';renderPatientsList()">${T('Stanza','Room')}</button>
+      <button class="pill ${S.sort==='avvisi'?'active':''}" onclick="S.sort='avvisi';renderPatientsList()">${T('Avvisi','Alerts')}</button>
+      <button class="pill ${S.filterAlerts?'active':''}" onclick="S.filterAlerts=!S.filterAlerts;renderPatientsList()" style="margin-left:auto">${T('Solo avvisi','Only alerts')}</button>
+    </div>
+
+    <div id="patients-list"></div>`;
+
+  document.getElementById('content-patients').innerHTML = html;
+  const patFab = document.querySelector('#page-patients .fab');
+  if (patFab) patFab.style.display = canEdit() ? '' : 'none';
+  renderPatientsList();
+}
+
+function renderPatientsList() {
+  const el = document.getElementById('patients-list');
+  if (!el) return;
+  const low = getLowMeds();
+  let patients = [...D.patients];
+  const q = S.search.toLowerCase();
+  if (q) {
+    patients = patients.filter(p =>
+      p.name.toLowerCase().includes(q) ||
+      (p.room||'').toLowerCase().includes(q) ||
+      (p.doctor?.name||'').toLowerCase().includes(q)
+    );
+  }
+  if (S.filterAlerts) patients = patients.filter(p => hasAlert(p));
+  if (S.sort === 'nome') patients.sort((a,b) => a.name.localeCompare(b.name));
+  else if (S.sort === 'stanza') patients.sort((a,b) => (a.room||'').localeCompare(b.room||''));
+  else if (S.sort === 'avvisi') patients.sort((a,b) => (hasAlert(b)?1:0)-(hasAlert(a)?1:0));
+
+  let html = '';
 
   // Low meds banner
-  if (low.length > 0) {
-    html += `<div class="alert-banner" onclick="S.sort='avvisi';S.filterAlerts=true;renderPatients()">
+  if (!q && low.length > 0) {
+    html += `<div class="alert-banner" onclick="S.sort='avvisi';S.filterAlerts=true;renderPatientsList()">
       <div class="alert-banner-hd">${svgIcon('ic-clock',15)} ${T(`Da ricaricare (${low.length})`, `To restock (${low.length})`)}
         <span style="font-size:12px;font-weight:400;margin-left:4px">${T('Tocca per visualizzarli','Tap to view')}</span>
       </div>`;
@@ -875,9 +904,7 @@ function renderPatients() {
     });
   }
 
-  document.getElementById('content-patients').innerHTML = html;
-  const patFab = document.querySelector('#page-patients .fab');
-  if (patFab) patFab.style.display = canEdit() ? '' : 'none';
+  el.innerHTML = html;
 }
 
 function showOpDropdown() {
@@ -1845,7 +1872,7 @@ function renderDb() {
       ${svgIcon('ic-search',16)}
       <input class="search-inp" id="db-search-inp" placeholder="${T('Cerca nel database...','Search database...')}"
         value="${escHtml(S.dbSearch)}"
-        oninput="S.dbSearch=this.value;renderDbList()">
+        oninput="S.dbSearch=this.value;S.dbPage=0;renderDbList()">
     </div>
     <div id="db-list"></div>`;
 
@@ -1867,40 +1894,43 @@ function renderDbList() {
   const custom = D.medicineDb.filter(m => !q || m.name.toLowerCase().includes(q))
     .sort((a,b) => a.name.localeCompare(b.name));
 
-  // Built-in medicines (SSN) - only show when searching
-  const builtin = (q && typeof BUILTIN_MEDS !== 'undefined')
-    ? BUILTIN_MEDS.filter(b => b[0].toLowerCase().includes(q)).slice(0, 50)
+  // Built-in medicines (SSN)
+  const allBuiltin = (typeof BUILTIN_MEDS !== 'undefined')
+    ? (q ? BUILTIN_MEDS.filter(b => b[0].toLowerCase().includes(q)) : BUILTIN_MEDS)
     : [];
+  const page = S.dbPage || 0;
+  const PAGE_SIZE = 100;
+  const builtin = allBuiltin.slice(0, (page + 1) * PAGE_SIZE);
+  const hasMore = allBuiltin.length > builtin.length;
 
-  if (custom.length === 0 && builtin.length === 0) {
-    el.innerHTML = q
-      ? `<div class="empty">${T('Nessun risultato','No results')}</div>`
-      : `<div style="padding:16px;font-size:13px;color:var(--t2);text-align:center">Database SSN: ${typeof BUILTIN_MEDS!=='undefined'?BUILTIN_MEDS.length.toLocaleString():0} farmaci disponibili.<br>Inizia a scrivere per cercare.</div>`;
+  if (custom.length === 0 && allBuiltin.length === 0) {
+    el.innerHTML = `<div class="empty">${T('Nessun risultato','No results')}</div>`;
     return;
   }
 
-  const customHtml = custom.map(m => `<div class="db-item">
-    <div class="db-item-icon">${getFmtIcon(m.format)}</div>
-    <div class="db-item-info">
-      <div class="db-item-name">${escHtml(m.name)}${fasciaBadge(m.fascia)}</div>
-      <div class="db-item-sub">${medFmtLabel(m)}</div>
-    </div>
-    ${canEdit() ? `<button class="edit-btn" onclick="navigate('add-db-med',{editDbMedId:'${m.id}'})">${svgIcon('ic-edit',18)}</button>` : ''}
-    ${canEdit() ? `<button class="edit-btn" style="color:var(--r)" onclick="confirmDeleteDbMed('${m.id}')">${svgIcon('ic-trash',18)}</button>` : ''}
-  </div>`).join('');
+  const customHtml = custom.length ? `
+    <div style="font-size:11px;color:var(--t3);padding:8px 4px 4px;text-transform:uppercase;letter-spacing:.5px">${T('Aggiunti da te','Added by you')}</div>
+    ${custom.map(m => `<div class="db-item">
+      <div class="db-item-icon">${getFmtIcon(m.format)}</div>
+      <div class="db-item-info">
+        <div class="db-item-name">${escHtml(m.name)}${fasciaBadge(m.fascia)}</div>
+        <div class="db-item-sub">${medFmtLabel(m)}</div>
+      </div>
+      ${canEdit() ? `<button class="edit-btn" onclick="navigate('add-db-med',{editDbMedId:'${m.id}'})">${svgIcon('ic-edit',18)}</button>` : ''}
+      ${canEdit() ? `<button class="edit-btn" style="color:var(--r)" onclick="confirmDeleteDbMed('${m.id}')">${svgIcon('ic-trash',18)}</button>` : ''}
+    </div>`).join('')}` : '';
 
   const builtinHtml = builtin.length ? `
-    ${q && custom.length ? `<div style="font-size:11px;color:var(--t3);padding:8px 4px 4px;text-transform:uppercase;letter-spacing:.5px">Database SSN</div>` : ''}
-    ${builtin.map((b, i) => {
-      const idx = BUILTIN_MEDS.indexOf(b);
-      return `<div class="db-item" style="opacity:.85">
-        <div class="db-item-icon">${getFmtIcon(b[1])}</div>
-        <div class="db-item-info">
-          <div class="db-item-name">${escHtml(b[0])}${fasciaBadge(b[2])}</div>
-          <div class="db-item-sub">${b[1]||''}</div>
-        </div>
-      </div>`;
-    }).join('')}` : '';
+    <div style="font-size:11px;color:var(--t3);padding:8px 4px 4px;text-transform:uppercase;letter-spacing:.5px">Database SSN (${allBuiltin.length.toLocaleString()} farmaci)</div>
+    ${builtin.map(b => `<div class="db-item">
+      <div class="db-item-icon">${getFmtIcon(b[1])}</div>
+      <div class="db-item-info">
+        <div class="db-item-name">${escHtml(b[0])}${fasciaBadge(b[2])}</div>
+        <div class="db-item-sub">${b[1]||''}</div>
+      </div>
+    </div>`).join('')}
+    ${hasMore ? `<button class="btn-secondary" style="margin:12px 0" onclick="S.dbPage=(S.dbPage||0)+1;renderDbList()">Mostra altri ${Math.min(PAGE_SIZE, allBuiltin.length - builtin.length)} farmaci...</button>` : ''}
+    ` : '';
 
   el.innerHTML = customHtml + builtinHtml;
 }
