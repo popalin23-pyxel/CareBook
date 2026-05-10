@@ -2210,7 +2210,8 @@ function exportData() {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `medicinali-backup-${todayISO()}.json`;
+  const facSlug = _fbFacilityName ? `-${_fbFacilityName.replace(/[^a-zA-Z0-9]/g,'-')}` : '';
+  a.download = `backup${facSlug}-${todayISO()}.json`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
