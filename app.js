@@ -1534,13 +1534,14 @@ function toggleDay(i) {
   if (idx >= 0) _medFormState.days.splice(idx, 1);
   else _medFormState.days.push(i);
   _medFormState.days.sort();
-  document.getElementById('days-grid').innerHTML = buildDaysGrid();
+  document.getElementById('days-selector').innerHTML = buildDaysSelector();
   recalcEnd();
 }
 
 function setAllDays() {
   _medFormState.days = [0,1,2,3,4,5,6];
-  renderAddMed();
+  document.getElementById('days-selector').innerHTML = buildDaysSelector();
+  recalcEnd();
 }
 
 // ── Time selector ───────────────────────────────────────────
