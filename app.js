@@ -719,12 +719,20 @@ function loadSuperAdminData() {
   const unsubFac = db.collection('facilities').onSnapshot(snap => {
     _facilities = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     renderSaContent();
-  }, e => console.error('sa-facilities snapshot:', e));
+  }, e => {
+    console.error('sa-facilities snapshot:', e);
+    const el = g('sa-facilities');
+    if (el) el.innerHTML = `<div class="section-box" style="color:var(--r)">⚠️ Errore permessi Firestore: aggiorna le regole di sicurezza nel Firebase Console.</div>`;
+  });
 
   const unsubUsers = db.collection('users').onSnapshot(snap => {
     _users = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     renderSaContent();
-  }, e => console.error('sa-users snapshot:', e));
+  }, e => {
+    console.error('sa-users snapshot:', e);
+    const el = g('sa-users');
+    if (el) el.innerHTML = `<div class="section-box" style="color:var(--r)">⚠️ Errore permessi: il Super Admin non può leggere la lista utenti. Aggiorna le regole Firestore (vedi istruzioni).</div>`;
+  });
 
   _saUnsubs = [unsubFac, unsubUsers];
 }
