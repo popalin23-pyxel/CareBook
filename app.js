@@ -37,6 +37,7 @@ let _fbRole = 'viewer';
 let _fbUnsubData = null;
 let _fbFacilityId = null;
 let _fbFacilityName = '';
+let _saUnsubs = [];
 const SUPER_ADMIN_EMAIL = 'popalin23@gmail.com';
 const ROLE_LABELS = {
   'superadmin': '⚡ Super Admin',
@@ -117,6 +118,10 @@ function T(it, en) {
 
 // ── Navigation ──────────────────────────────────────────────
 function navigate(page, params) {
+  if (S.page === 'super-admin' && page !== 'super-admin' && _saUnsubs.length) {
+    _saUnsubs.forEach(u => u());
+    _saUnsubs = [];
+  }
   if (params) Object.assign(S, params);
   S.page = page;
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
@@ -426,7 +431,8 @@ async function handleAuthChange(user) {
     const userRef = db.collection('users').doc(user.uid);
     const userSnap = await userRef.get();
     if (!userSnap.exists) {
-      await userRef.set({ email: user.email, role: 'nurse-read', facilityId: null, createdAt: new Date().toISOString() });
+      // Scrive solo i campi che l'utente può impostare (no role/facilityId — li assegna il super admin)
+      await userRef.set({ email: user.email, createdAt: new Date().toISOString() });
       _fbRole = 'nurse-read';
       _fbFacilityId = null;
     } else {
@@ -638,23 +644,23 @@ function superAdminEnterFacility(facilityId, facilityName) {
   setupFbListeners();
 }
 
-async function loadSuperAdminData() {
-  try {
-    const [facSnap, usersSnap] = await Promise.all([
-      db.collection('facilities').get(),
-      db.collection('users').get()
-    ]);
-    const facilities = facSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-    const users = usersSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+function loadSuperAdminData() {
+  // Clean up any previous listeners
+  _saUnsubs.forEach(u => u());
+  _saUnsubs = [];
 
+  let _facilities = [];
+  let _users = [];
+
+  function renderSaContent() {
     // Strutture
     const facEl = g('sa-facilities');
     if (facEl) {
-      if (!facilities.length) {
+      if (!_facilities.length) {
         facEl.innerHTML = '<div class="empty">Nessuna struttura. Creane una qui sotto.</div>';
       } else {
-        facEl.innerHTML = facilities.map(f => {
-          const n = users.filter(u => u.facilityId === f.id).length;
+        facEl.innerHTML = _facilities.map(f => {
+          const n = _users.filter(u => u.facilityId === f.id).length;
           return `<div class="section-box" style="margin-bottom:8px;display:flex;align-items:center;gap:12px">
             <div style="flex:1">
               <div style="font-size:15px;font-weight:700">🏥 ${escHtml(f.name)}</div>
@@ -670,13 +676,23 @@ async function loadSuperAdminData() {
     // Utenti
     const usersEl = g('sa-users');
     if (usersEl) {
-      const facOpts = facilities.map(f => `<option value="${f.id}">${escHtml(f.name)}</option>`).join('');
-      if (!users.length) {
+      const facOpts = _facilities.map(f => `<option value="${f.id}">${escHtml(f.name)}</option>`).join('');
+      if (!_users.length) {
         usersEl.innerHTML = '<div class="empty">Nessun utente registrato.</div>';
       } else {
-        usersEl.innerHTML = users.map(u => `
-          <div class="section-box" style="margin-bottom:8px" id="user-card-${u.id}">
-            <div style="font-size:13px;font-weight:600;margin-bottom:8px">${escHtml(u.email)}</div>
+        // Pending users (no facilityId) go first
+        const sorted = [..._users].sort((a, b) => {
+          const aP = !a.facilityId ? 0 : 1;
+          const bP = !b.facilityId ? 0 : 1;
+          return aP - bP;
+        });
+        usersEl.innerHTML = sorted.map(u => {
+          const isPending = !u.facilityId;
+          return `<div class="section-box" style="margin-bottom:8px${isPending ? ';border-left:3px solid var(--p)' : ''}" id="user-card-${u.id}">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+              <div style="font-size:13px;font-weight:600;flex:1">${escHtml(u.email)}</div>
+              ${isPending ? '<span style="font-size:11px;background:var(--p);color:#fff;padding:2px 7px;border-radius:20px;white-space:nowrap">In attesa</span>' : ''}
+            </div>
             <div style="display:flex;gap:8px;flex-wrap:wrap">
               <select id="fac-${u.id}" class="form-input" style="flex:1;min-width:140px;padding:8px 10px;font-size:13px">
                 <option value="">— Nessuna struttura —</option>
@@ -689,18 +705,28 @@ async function loadSuperAdminData() {
               </select>
               <button class="pill active" onclick="saveUserAssignment('${u.id}')" style="white-space:nowrap;align-self:center" id="btn-${u.id}">Salva</button>
             </div>
-          </div>`).join('');
-        // Set current values
-        setTimeout(() => users.forEach(u => {
+          </div>`;
+        }).join('');
+        setTimeout(() => sorted.forEach(u => {
           const fs = g(`fac-${u.id}`); const rs = g(`role-${u.id}`);
           if (fs && u.facilityId) fs.value = u.facilityId;
           if (rs && u.role) rs.value = u.role;
         }), 80);
       }
     }
-  } catch(e) {
-    console.error('loadSuperAdminData:', e);
   }
+
+  const unsubFac = db.collection('facilities').onSnapshot(snap => {
+    _facilities = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    renderSaContent();
+  }, e => console.error('sa-facilities snapshot:', e));
+
+  const unsubUsers = db.collection('users').onSnapshot(snap => {
+    _users = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    renderSaContent();
+  }, e => console.error('sa-users snapshot:', e));
+
+  _saUnsubs = [unsubFac, unsubUsers];
 }
 
 async function createFacility() {
