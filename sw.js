@@ -1,4 +1,4 @@
-const CACHE = 'medicinali-pwa-v4';
+const CACHE = 'medicinali-pwa-v5';
 const ASSETS = ['./', './index.html', './app.js', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -27,8 +27,6 @@ self.addEventListener('fetch', e => {
   }
 
   // App files (HTML, JS, manifest): network-first
-  // → prende sempre la versione aggiornata quando c'è connessione
-  // → cade sulla cache se offline
   e.respondWith(
     fetch(e.request).then(res => {
       const copy = res.clone();
