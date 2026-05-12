@@ -1,36 +1,41 @@
-/* Simple offline cache */
-const CACHE_NAME = "ev-cost-pwa-v1";
-const ASSETS = [
-  "./",
-  "./index.html",
-  "./app.js",
-  "./manifest.json",
-  "./icons/icon-192.png",
-  "./icons/icon-512.png"
-];
+const CACHE = 'medicinali-pwa-v4';
+const ASSETS = ['./', './index.html', './app.js', './manifest.json', './icon-192.png', './icon-512.png'];
 
-self.addEventListener("install", (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS)).then(()=>self.skipWaiting())
+self.addEventListener('install', e => {
+  e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));
+});
+
+self.addEventListener('activate', e => {
+  e.waitUntil(
+    caches.keys().then(keys => Promise.all(keys.map(k => k !== CACHE && caches.delete(k))))
+      .then(() => self.clients.claim())
   );
 });
 
-self.addEventListener("activate", (event) => {
-  event.waitUntil(
-    caches.keys().then(keys => Promise.all(keys.map(k => (k === CACHE_NAME ? null : caches.delete(k))))).then(()=>self.clients.claim())
-  );
-});
+self.addEventListener('fetch', e => {
+  const url = new URL(e.request.url);
 
-self.addEventListener("fetch", (event) => {
-  const req = event.request;
-  event.respondWith(
-    caches.match(req).then((cached) => {
-      if (cached) return cached;
-      return fetch(req).then((res) => {
-        const copy = res.clone();
-        caches.open(CACHE_NAME).then(cache => cache.put(req, copy)).catch(()=>{});
+  // Icone: cache-first (non cambiano mai)
+  if (url.pathname.endsWith('.png') || url.pathname.endsWith('.ico')) {
+    e.respondWith(
+      caches.match(e.request).then(cached => cached || fetch(e.request).then(res => {
+        caches.open(CACHE).then(c => c.put(e.request, res.clone()));
         return res;
-      }).catch(()=> caches.match("./index.html"));
-    })
+      }))
+    );
+    return;
+  }
+
+  // App files (HTML, JS, manifest): network-first
+  // → prende sempre la versione aggiornata quando c'è connessione
+  // → cade sulla cache se offline
+  e.respondWith(
+    fetch(e.request).then(res => {
+      const copy = res.clone();
+      caches.open(CACHE).then(c => c.put(e.request, copy)).catch(() => {});
+      return res;
+    }).catch(() =>
+      caches.match(e.request).then(cached => cached || caches.match('./index.html'))
+    )
   );
 });

@@ -1,13 +1,394 @@
 <!DOCTYPE html>
 <html lang="it">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CareBook</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>Medicinali Pazienti</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#3d9e8c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<style>
+:root {
+  --p: #3d9e8c;
+  --pd: #2d7a6c;
+  --pl: #e8f5f2;
+  --w: #e09038;
+  --wl: #fff8ee;
+  --r: #e53935;
+  --bg: #f0f2f0;
+  --sur: #fff;
+  --t1: #1a1a1a;
+  --t2: #6b7280;
+  --t3: #9ca3af;
+  --br: #e5e7eb;
+  --rad: 14px;
+  --sh: 0 1px 4px rgba(0,0,0,.08);
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--t1);min-height:100vh;max-width:600px;margin:0 auto}
+button{cursor:pointer;font-family:inherit}
+input,select,textarea{font-family:inherit}
+a{color:inherit;text-decoration:none}
+
+/* Pages */
+.page{display:none;min-height:100vh;flex-direction:column}
+.page.active{display:flex}
+
+/* Top bar */
+.bar{background:var(--sur);padding:14px 16px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--br);position:sticky;top:0;z-index:10}
+.bar-back{background:none;border:none;color:var(--t1);font-size:20px;padding:4px 6px 4px 0;line-height:1}
+.bar-title{flex:1;font-size:18px;font-weight:700}
+.bar-icons{display:flex;gap:6px}
+.ib{background:none;border:none;color:var(--t2);padding:7px;border-radius:9px;font-size:18px;line-height:1;display:flex;align-items:center;justify-content:center}
+.ib:hover{background:var(--bg)}
+.ib svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+
+/* Scrollable content */
+.scroll{flex:1;overflow-y:auto;padding:14px 14px 100px}
+
+/* Search */
+.search-wrap{position:relative;margin-bottom:12px}
+.search-wrap svg{position:absolute;left:12px;top:50%;transform:translateY(-50%);width:16px;height:16px;stroke:var(--t3);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}
+.search-inp{width:100%;padding:11px 14px 11px 38px;border:1.5px solid var(--br);border-radius:50px;font-size:14px;background:var(--sur);color:var(--t1);outline:none}
+.search-inp:focus{border-color:var(--p)}
+
+/* Pill buttons row */
+.pills{display:flex;align-items:center;gap:6px;margin-bottom:12px;flex-wrap:wrap}
+.pill{background:var(--sur);border:1.5px solid var(--br);border-radius:50px;padding:7px 14px;font-size:13px;font-weight:500;color:var(--t2);white-space:nowrap}
+.pill.active,.pill:hover{background:var(--p);border-color:var(--p);color:#fff}
+.pill-label{font-size:12px;color:var(--t2);margin-right:4px}
+
+/* Operator selector */
+.op-selector{display:inline-flex;align-items:center;gap:8px;background:var(--sur);border:1.5px solid var(--br);border-radius:50px;padding:7px 14px 7px 10px;font-size:14px;font-weight:500;margin-bottom:14px}
+.op-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.op-arrow{font-size:10px;color:var(--t2)}
+
+/* Alert banner */
+.alert-banner{background:var(--wl);border:1.5px solid #f0c07a;border-radius:var(--rad);padding:12px 14px;margin-bottom:12px}
+.alert-banner-hd{display:flex;align-items:center;gap:6px;font-weight:600;font-size:14px;color:var(--w);margin-bottom:8px}
+.alert-item{display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid #f0c07a30}
+.alert-item-dot{width:14px;height:14px;border-radius:50%;border:2px solid var(--w);flex-shrink:0}
+.alert-item-info{flex:1}
+.alert-item-name{font-size:14px;font-weight:500}
+.alert-item-sub{font-size:12px;color:var(--t2)}
+.alert-item-days{font-size:13px;font-weight:600;color:var(--w)}
+
+/* Patient cards */
+.patient-card{background:var(--sur);border-radius:var(--rad);padding:14px;box-shadow:var(--sh);margin-bottom:10px;display:flex;align-items:center;gap:12px;border:1.5px solid transparent}
+.patient-card.has-alert{border-color:var(--w)}
+.avatar{width:42px;height:42px;border-radius:50%;background:var(--pl);color:var(--p);font-size:18px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.patient-info{flex:1;min-width:0}
+.patient-name-row{display:flex;align-items:center;gap:6px;margin-bottom:3px}
+.patient-name{font-size:16px;font-weight:600}
+.badge{background:var(--pl);color:var(--p);border-radius:6px;padding:2px 8px;font-size:12px;font-weight:600}
+.warn-icon{font-size:14px;color:var(--w)}
+.patient-sub{font-size:13px;color:var(--t2)}
+.chevron{color:var(--t3);font-size:16px}
+
+/* Section header */
+.sec-hd{font-size:13px;font-weight:600;color:var(--t2);letter-spacing:.5px;text-transform:uppercase;margin:18px 0 8px}
+
+/* FAB */
+.fab{position:fixed;bottom:22px;right:16px;background:var(--p);color:#fff;border:none;border-radius:50px;padding:13px 20px;font-size:15px;font-weight:600;display:flex;align-items:center;gap:7px;box-shadow:0 4px 16px rgba(61,158,140,.45);z-index:20}
+.fab:hover{background:var(--pd)}
+
+/* Detail page */
+.det-header{background:var(--sur);border-radius:var(--rad);padding:16px;box-shadow:var(--sh);margin-bottom:12px;display:flex;align-items:center;gap:14px}
+.det-avatar{width:52px;height:52px;border-radius:50%;background:var(--pl);color:var(--p);font-size:22px;font-weight:700;display:flex;align-items:center;justify-content:center}
+.det-name{font-size:18px;font-weight:700}
+.det-room{font-size:13px;color:var(--t2);display:flex;align-items:center;gap:4px;margin-top:2px}
+
+.allergy-box{background:var(--wl);border:1.5px solid #f0c07a;border-radius:var(--rad);padding:11px 14px;margin-bottom:12px;font-size:14px;color:var(--t1)}
+.allergy-box strong{color:var(--w)}
+
+.contact-card{background:var(--sur);border-radius:var(--rad);padding:14px;box-shadow:var(--sh);margin-bottom:10px}
+.contact-role{font-size:11px;font-weight:700;color:var(--t2);letter-spacing:.5px;float:right;margin-top:2px}
+.contact-name{font-size:15px;font-weight:600;margin-bottom:8px}
+.contact-row{display:flex;align-items:center;gap:8px;font-size:14px;color:var(--t2);margin-bottom:5px}
+.contact-row a{color:var(--p)}
+
+.section-box{background:var(--sur);border-radius:var(--rad);padding:14px;box-shadow:var(--sh);margin-bottom:10px}
+.section-box-hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.section-box-title{font-size:16px;font-weight:700}
+.add-link{color:var(--p);font-size:14px;font-weight:600;background:none;border:none}
+.sub-label{font-size:11px;font-weight:700;color:var(--t3);letter-spacing:.5px;margin-bottom:8px;margin-top:8px}
+
+.visit-item{display:flex;align-items:flex-start;gap:12px;padding:8px 0;border-top:1px solid var(--br)}
+.visit-date-box{background:var(--bg);border-radius:8px;padding:6px 10px;text-align:center;flex-shrink:0;min-width:48px}
+.visit-day{font-size:18px;font-weight:700;line-height:1}
+.visit-month{font-size:10px;font-weight:600;color:var(--t2);text-transform:uppercase}
+.visit-info{flex:1}
+.visit-title{font-size:14px;font-weight:600}
+.visit-sub{font-size:12px;color:var(--t2);margin-top:2px}
+.visit-notes{font-size:12px;color:var(--t2);font-style:italic;margin-top:2px}
+
+.med-item{display:flex;align-items:center;gap:12px;padding:8px 0;border-top:1px solid var(--br)}
+.med-icon{width:36px;height:36px;border-radius:50%;border:2px solid var(--br);display:flex;align-items:center;justify-content:center;font-size:13px;color:var(--t2);flex-shrink:0}
+.med-icon.low{border-color:var(--w);color:var(--w)}
+.med-info{flex:1}
+.med-name{font-size:14px;font-weight:600}
+.med-sub{font-size:12px;color:var(--t2);margin-top:2px}
+.med-status{font-size:12px;font-weight:600;color:var(--w)}
+.med-status.ok{color:var(--p)}
+.med-status.expired{color:var(--r)}
+
+/* Add-to-patient button */
+.add-med-btn{width:100%;margin-top:10px;padding:10px;border:1.5px dashed var(--br);border-radius:10px;background:none;color:var(--p);font-size:14px;font-weight:600}
+
+/* Forms */
+.form-group{margin-bottom:16px}
+.form-label{font-size:13px;font-weight:600;color:var(--t2);margin-bottom:6px;display:block}
+.form-input{width:100%;padding:11px 14px;border:1.5px solid var(--br);border-radius:10px;font-size:15px;color:var(--t1);background:var(--sur);outline:none}
+.form-input:focus{border-color:var(--p)}
+.form-input::placeholder{color:var(--t3)}
+textarea.form-input{resize:vertical;min-height:70px}
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.form-section{font-size:12px;font-weight:700;color:var(--t2);letter-spacing:.6px;text-transform:uppercase;margin:20px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--br)}
+
+/* Format selector */
+.fmt-grid{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
+.fmt-btn{border:1.5px solid var(--br);border-radius:50px;padding:7px 14px;font-size:13px;background:var(--sur);color:var(--t2);display:flex;align-items:center;gap:5px}
+.fmt-btn.active,.fmt-btn:hover{border-color:var(--p);background:var(--pl);color:var(--p)}
+
+/* Day checkboxes */
+.days-grid{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.day-btn{width:40px;height:40px;border-radius:50%;border:1.5px solid var(--br);background:var(--sur);font-size:12px;font-weight:600;color:var(--t2)}
+.day-btn.active{border-color:var(--p);background:var(--p);color:#fff}
+
+/* Dose inputs */
+.dose-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:6px}
+.dose-cell label{font-size:11px;color:var(--t2);display:block;margin-bottom:4px;text-align:center}
+.dose-cell input{width:100%;text-align:center;padding:9px 4px;border:1.5px solid var(--br);border-radius:9px;font-size:15px;font-weight:600}
+.dose-cell input:focus{border-color:var(--p);outline:none}
+
+/* Primary button */
+.btn-primary{width:100%;padding:14px;background:var(--p);color:#fff;border:none;border-radius:12px;font-size:16px;font-weight:600;margin-top:8px}
+.btn-primary:hover{background:var(--pd)}
+.btn-secondary{width:100%;padding:13px;background:var(--sur);color:var(--t1);border:1.5px solid var(--br);border-radius:12px;font-size:15px;font-weight:600;margin-top:8px}
+.btn-danger{width:100%;padding:13px;background:#fff5f5;color:var(--r);border:1.5px solid var(--r);border-radius:12px;font-size:15px;font-weight:600;margin-top:8px}
+
+/* Calendar */
+.cal-toggle{display:flex;background:var(--bg);border-radius:50px;padding:4px;margin:0 auto 16px;width:fit-content}
+.cal-tab{padding:8px 22px;border-radius:50px;font-size:14px;font-weight:600;border:none;background:transparent;color:var(--t2)}
+.cal-tab.active{background:var(--p);color:#fff}
+.cal-box{background:var(--sur);border-radius:var(--rad);box-shadow:var(--sh);overflow:hidden;margin-bottom:14px}
+.cal-nav{display:flex;align-items:center;justify-content:space-between;padding:14px 16px}
+.cal-nav-btn{background:none;border:none;font-size:18px;color:var(--p);padding:4px 10px}
+.cal-month{font-size:16px;font-weight:700;text-align:center}
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr)}
+.cal-dow{text-align:center;font-size:11px;font-weight:600;color:var(--t2);padding:6px 0}
+.cal-day{text-align:center;padding:4px 2px;position:relative;cursor:pointer;min-height:52px;display:flex;flex-direction:column;align-items:center}
+.cal-day-num{width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:50%;font-size:14px;margin:0 auto}
+.cal-day.today .cal-day-num{background:var(--p);color:#fff;font-weight:700}
+.cal-day.selected .cal-day-num{background:var(--pl);color:var(--p);font-weight:700;border:2px solid var(--p)}
+.cal-day.other-month .cal-day-num{color:var(--t3)}
+.cal-day.sat .cal-day-num,.cal-day.sun .cal-day-num{color:var(--w)}
+.cal-dots{display:flex;gap:3px;justify-content:center;margin-top:2px;flex-wrap:wrap}
+.cal-dot{width:5px;height:5px;border-radius:50%}
+.cal-legend{display:flex;gap:16px;font-size:12px;color:var(--t2);padding:8px 16px 12px;align-items:center}
+.cal-legend-dot{width:8px;height:8px;border-radius:50%}
+.cal-today-btn{background:var(--pl);border:none;border-radius:50px;padding:5px 14px;font-size:13px;font-weight:600;color:var(--p)}
+
+.cal-event{background:var(--sur);border-radius:10px;padding:12px 14px;margin-bottom:8px;box-shadow:var(--sh);display:flex;align-items:center;gap:12px}
+.cal-event-icon{width:38px;height:38px;border-radius:50%;border:2px solid var(--br);display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0}
+.cal-event-info{flex:1}
+.cal-event-name{font-size:14px;font-weight:600}
+.cal-event-sub{font-size:12px;color:var(--t2);margin-top:2px}
+
+/* DB list */
+.db-item{background:var(--sur);border-radius:var(--rad);padding:13px 14px;box-shadow:var(--sh);margin-bottom:8px;display:flex;align-items:center;gap:12px}
+.db-item-icon{width:36px;height:36px;border-radius:50%;border:2px solid var(--br);display:flex;align-items:center;justify-content:center;font-size:13px;color:var(--t2);flex-shrink:0}
+.db-item-info{flex:1}
+.db-item-name{font-size:15px;font-weight:600}
+.db-item-sub{font-size:12px;color:var(--t2)}
+.edit-btn{background:none;border:none;color:var(--t3);font-size:18px;padding:6px}
+
+/* Settings */
+.settings-sec{background:var(--sur);border-radius:var(--rad);box-shadow:var(--sh);margin-bottom:14px;overflow:hidden}
+.settings-sec-title{font-size:11px;font-weight:700;color:var(--t2);letter-spacing:.6px;text-transform:uppercase;padding:14px 16px 6px}
+.settings-sec-desc{font-size:12px;color:var(--t3);padding:0 16px 10px}
+.settings-row{padding:12px 16px;border-top:1px solid var(--br);display:flex;align-items:center;justify-content:space-between;gap:10px}
+.settings-row-label{font-size:14px;display:flex;align-items:center;gap:8px}
+.settings-row-val{font-size:14px;color:var(--t2)}
+
+/* Language toggle */
+.lang-toggle{display:flex;background:var(--bg);border-radius:50px;padding:3px;margin:10px 16px}
+.lang-btn{flex:1;padding:7px;border-radius:50px;font-size:14px;font-weight:600;border:none;background:transparent;color:var(--t2)}
+.lang-btn.active{background:var(--p);color:#fff}
+
+/* Operator list */
+.op-item{padding:12px 16px;border-top:1px solid var(--br);display:flex;align-items:center;gap:12px}
+.op-item-dot{width:12px;height:12px;border-radius:50%}
+.op-item-name{flex:1;font-size:15px;font-weight:500}
+.op-active-badge{background:var(--pl);color:var(--p);border-radius:50px;padding:3px 10px;font-size:12px;font-weight:600}
+.op-set-btn{background:none;border:none;color:var(--p);font-size:13px;font-weight:600}
+
+.add-op-form{padding:14px 16px;border-top:1px solid var(--br)}
+.add-op-title{font-size:14px;font-weight:600;margin-bottom:10px}
+.color-row{display:flex;gap:8px;margin:10px 0}
+.color-swatch{width:32px;height:32px;border-radius:50%;border:3px solid transparent;cursor:pointer}
+.color-swatch.active{border-color:var(--t1)}
+
+.stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--br);margin-top:10px;border-radius:0 0 var(--rad) var(--rad);overflow:hidden}
+.stat-cell{background:var(--sur);padding:14px 8px;text-align:center}
+.stat-num{font-size:22px;font-weight:700;color:var(--p)}
+.stat-label{font-size:11px;color:var(--t2);margin-top:2px}
+
+/* Alert count badge */
+.cnt-badge{background:var(--w);color:#fff;border-radius:50%;width:18px;height:18px;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+
+/* No data */
+.empty{text-align:center;padding:40px 20px;color:var(--t3);font-size:14px}
+
+/* Autocomplete dropdown */
+.autocomplete{position:relative}
+.autocomplete-list{position:absolute;top:100%;left:0;right:0;background:var(--sur);border:1.5px solid var(--br);border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.12);z-index:100;max-height:200px;overflow-y:auto;margin-top:4px}
+.autocomplete-item{padding:11px 14px;font-size:14px;cursor:pointer;border-bottom:1px solid var(--br)}
+.autocomplete-item:last-child{border-bottom:none}
+.autocomplete-item:hover{background:var(--pl)}
+
+/* PIN screen */
+.pin-overlay{position:fixed;inset:0;background:var(--p);z-index:200;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px}
+.pin-dots{display:flex;gap:18px;margin:32px 0 10px}
+.pin-dot{width:16px;height:16px;border-radius:50%;border:2px solid rgba(255,255,255,.5);transition:background .15s}
+.pin-dot.filled{background:#fff;border-color:#fff}
+.pin-keypad{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;width:252px;margin-top:24px}
+.pin-key{background:rgba(255,255,255,.15);border:none;border-radius:50%;width:78px;height:78px;font-size:26px;font-weight:600;color:#fff;cursor:pointer}
+.pin-key:active{background:rgba(255,255,255,.3)}
+.pin-key.del{font-size:22px}
+
+/* Time chips */
+.time-chip-grid{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.time-chip{border:1.5px solid var(--br);border-radius:50px;padding:7px 11px;font-size:13px;font-weight:600;background:var(--sur);color:var(--t2);font-variant-numeric:tabular-nums}
+.time-chip.active{border-color:var(--p);background:var(--p);color:#fff}
+
+/* Schedule rows */
+.schedule-list{margin-top:4px}
+.schedule-row{display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--br)}
+.schedule-time{font-size:15px;font-weight:700;min-width:52px;font-variant-numeric:tabular-nums}
+.qty-ctrl{display:flex;align-items:center;gap:8px;background:var(--bg);border-radius:50px;padding:5px 12px}
+.qty-ctrl button{background:none;border:none;font-size:20px;color:var(--p);font-weight:700;padding:0;line-height:1;cursor:pointer}
+.qty-ctrl span{font-size:15px;font-weight:700;min-width:28px;text-align:center}
+.schedule-unit{font-size:13px;color:var(--t2);flex:1}
+.schedule-del{background:none;border:none;color:var(--t3);font-size:20px;line-height:1;padding:0 4px;cursor:pointer}
+
+/* Print styles */
+@media print{
+  body{max-width:none}
+  .no-print{display:none!important}
+}
+</style>
 </head>
 <body>
-  <h1>CareBook funziona!</h1>
 
-  <script src="app.js"></script>
+<!-- ============ PAGE: PATIENTS ============ -->
+<div id="page-patients" class="page active">
+  <div class="bar" id="bar-patients"></div>
+  <div class="scroll" id="content-patients"></div>
+  <button class="fab" onclick="navigate('add-patient')">+ Nuovo paziente</button>
+</div>
+
+<!-- ============ PAGE: PATIENT DETAIL ============ -->
+<div id="page-patient-detail" class="page">
+  <div class="bar" id="bar-patient-detail"></div>
+  <div class="scroll" id="content-patient-detail"></div>
+</div>
+
+<!-- ============ PAGE: ADD/EDIT PATIENT ============ -->
+<div id="page-add-patient" class="page">
+  <div class="bar" id="bar-add-patient"></div>
+  <div class="scroll" id="content-add-patient"></div>
+</div>
+
+<!-- ============ PAGE: ADD MEDICINE TO PATIENT ============ -->
+<div id="page-add-med" class="page">
+  <div class="bar" id="bar-add-med"></div>
+  <div class="scroll" id="content-add-med"></div>
+</div>
+
+<!-- ============ PAGE: ADD VISIT ============ -->
+<div id="page-add-visit" class="page">
+  <div class="bar" id="bar-add-visit"></div>
+  <div class="scroll" id="content-add-visit"></div>
+</div>
+
+<!-- ============ PAGE: CALENDAR ============ -->
+<div id="page-calendar" class="page">
+  <div class="bar" id="bar-calendar"></div>
+  <div class="scroll" id="content-calendar"></div>
+</div>
+
+<!-- ============ PAGE: DATABASE ============ -->
+<div id="page-db" class="page">
+  <div class="bar" id="bar-db"></div>
+  <div class="scroll" id="content-db"></div>
+  <button class="fab" onclick="navigate('add-db-med')">+ Aggiungi</button>
+</div>
+
+<!-- ============ PAGE: ADD DB MED ============ -->
+<div id="page-add-db-med" class="page">
+  <div class="bar" id="bar-add-db-med"></div>
+  <div class="scroll" id="content-add-db-med"></div>
+</div>
+
+<!-- ============ PAGE: SETTINGS ============ -->
+<div id="page-settings" class="page">
+  <div class="bar" id="bar-settings"></div>
+  <div class="scroll" id="content-settings"></div>
+</div>
+
+<!-- ============ PAGE: WAITING ============ -->
+<div id="page-waiting" class="page"></div>
+
+<!-- ============ PAGE: SUPER ADMIN ============ -->
+<div id="page-super-admin" class="page"></div>
+
+<!-- ============ PAGE: SEARCH ============ -->
+<div id="page-search" class="page"></div>
+
+<!-- ============ PAGE: LOGIN ============ -->
+<div id="page-login" class="page"></div>
+
+<!-- ============ PAGE: REGISTER ============ -->
+<div id="page-register" class="page"></div>
+
+<!-- SVG icon defs (reusable) -->
+<svg style="display:none">
+  <symbol id="ic-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></symbol>
+  <symbol id="ic-cal" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></symbol>
+  <symbol id="ic-db" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></symbol>
+  <symbol id="ic-cog" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></symbol>
+  <symbol id="ic-print" viewBox="0 0 24 24"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></symbol>
+  <symbol id="ic-edit" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></symbol>
+  <symbol id="ic-trash" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></symbol>
+  <symbol id="ic-phone" viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.61 3.38 2 2 0 0 1 3.6 1.21h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L7.91 8.91a16 16 0 0 0 6.16 6.16l.91-.91a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></symbol>
+  <symbol id="ic-mail" viewBox="0 0 24 24"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></symbol>
+  <symbol id="ic-home" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></symbol>
+  <symbol id="ic-plus" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></symbol>
+  <symbol id="ic-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></symbol>
+  <symbol id="ic-bell" viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></symbol>
+  <symbol id="ic-user" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></symbol>
+  <symbol id="ic-users" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
+  <symbol id="ic-chevron" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></symbol>
+  <symbol id="ic-filter" viewBox="0 0 24 24"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></symbol>
+  <symbol id="ic-arrow-left" viewBox="0 0 24 24"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></symbol>
+  <symbol id="ic-sort" viewBox="0 0 24 24"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></symbol>
+  <symbol id="ic-share" viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></symbol>
+  <symbol id="ic-lock" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+  <symbol id="ic-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></symbol>
+  <symbol id="ic-upload" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></symbol>
+</svg>
+
+<script>
+function svgIcon(id, size) {
+  size = size || 20;
+  return `<svg width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><use href="#${id}"/></svg>`;
+}
+</script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="medicines-db.js"></script>
+<script src="app.js"></script>
 </body>
 </html>
