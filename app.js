@@ -1,4 +1,4 @@
-/* Medicinali Pazienti PWA */
+/* CareStock PWA */
 'use strict';
 
 // ── Constants ──────────────────────────────────────────────
@@ -489,7 +489,7 @@ function renderLogin() {
   el.innerHTML = `
     <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px 24px">
       <div style="width:68px;height:68px;background:var(--pl);border-radius:50%;display:flex;align-items:center;justify-content:center;margin-bottom:20px;font-size:30px">💊</div>
-      <div style="font-size:24px;font-weight:800;margin-bottom:6px;text-align:center">Medicinali Pazienti</div>
+      <div style="font-size:24px;font-weight:800;margin-bottom:6px;text-align:center">CareStock</div>
       <div style="font-size:14px;color:var(--t2);margin-bottom:32px;text-align:center">Accedi per continuare</div>
       <div style="width:100%;max-width:360px">
         <div class="form-group">
@@ -591,7 +591,7 @@ function renderWaiting() {
   if (!el) return;
   el.innerHTML = `
     <div class="bar">
-      <span class="bar-title" style="flex:1">CareBook</span>
+      <span class="bar-title" style="flex:1">CareStock</span>
       <div class="bar-icons">
         <button class="ib" style="color:var(--r);font-size:12px;font-weight:700" onclick="doLogout()">Esci</button>
       </div>
@@ -2390,7 +2390,7 @@ function printPatient(id) {
   <tbody>${medsRows}</tbody></table>` : ''}
   ${visits.length > 0 ? `<h2 style="margin-top:20px">Visite e appuntamenti</h2>
   ${visitRows('Prossime', futureV)}${visitRows('Passati', pastV)}` : ''}
-  <div class="footer">Medicinali Pazienti • ${fmtDatetime(now.toISOString())}</div>
+  <div class="footer">CareStock • ${fmtDatetime(now.toISOString())}</div>
   <script>window.print();<\/script>
   </body></html>`;
 
@@ -2492,7 +2492,7 @@ function renderPinScreen() {
   }
   el.innerHTML = `
     <div class="pin-overlay">
-      <div style="font-size:26px;font-weight:800;color:#fff">Medicinali Pazienti</div>
+      <div style="font-size:26px;font-weight:800;color:#fff">CareStock</div>
       ${isUnlock ? `<div style="font-size:14px;color:rgba(255,255,255,.7);margin-top:6px">${T('Inserisci il PIN per accedere','Enter PIN to access')}</div>` : ''}
       <div style="font-size:16px;font-weight:600;color:rgba(255,255,255,.9);margin-top:${isUnlock?'32px':'16px'}">${title}</div>
       <div class="pin-dots">
