@@ -1,6 +1,6 @@
 {
-  "name": "Medicinali Pazienti",
-  "short_name": "Pazienti",
+  "name": "CareStock",
+  "short_name": "CareStock",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#f0f2f0",
