@@ -89,8 +89,34 @@ a{color:inherit;text-decoration:none}
 .sec-hd{font-size:13px;font-weight:600;color:var(--t2);letter-spacing:.5px;text-transform:uppercase;margin:18px 0 8px}
 
 /* FAB */
-.fab{position:fixed;bottom:22px;right:16px;background:var(--p);color:#fff;border:none;border-radius:50px;padding:13px 20px;font-size:15px;font-weight:600;display:flex;align-items:center;gap:7px;box-shadow:0 4px 16px rgba(61,158,140,.45);z-index:20}
+.fab{position:fixed;bottom:88px;right:16px;background:var(--p);color:#fff;border:none;border-radius:50px;padding:13px 20px;font-size:15px;font-weight:600;display:flex;align-items:center;gap:7px;box-shadow:0 4px 16px rgba(61,158,140,.45);z-index:20}
 .fab:hover{background:var(--pd)}
+
+/* Bottom navigation */
+.bottom-nav{position:fixed;bottom:0;left:0;right:0;max-width:600px;margin:0 auto;background:var(--sur);border-top:1px solid var(--br);display:none;justify-content:space-around;align-items:flex-end;padding:6px 4px calc(6px + env(safe-area-inset-bottom, 0px));z-index:30}
+.bottom-nav.visible{display:flex}
+.bnav-btn{background:none;border:none;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:10.5px;font-weight:600;color:var(--t3);padding:2px 8px;position:relative;min-width:56px}
+.bnav-btn.active{color:var(--p)}
+.bnav-btn svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.bnav-scan{background:var(--p);color:#fff;border:4px solid var(--bg);border-radius:50%;width:54px;height:54px;display:flex;align-items:center;justify-content:center;margin-top:-24px;box-shadow:0 4px 14px rgba(61,158,140,.5);flex-shrink:0}
+.bnav-scan svg{width:24px;height:24px;stroke:#fff;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.bnav-badge{position:absolute;top:-2px;right:8px;background:var(--r);color:#fff;border-radius:50px;min-width:16px;height:16px;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0 4px}
+
+/* Home dashboard */
+.stat-row{display:flex;gap:10px;margin-bottom:14px}
+.stat-tile{flex:1;background:var(--sur);border-radius:var(--rad);box-shadow:var(--sh);padding:12px 6px;text-align:center;border:1.5px solid transparent;cursor:pointer}
+.stat-tile .num{font-size:24px;font-weight:800;color:var(--p);line-height:1.1}
+.stat-tile .lbl{font-size:11px;color:var(--t2);margin-top:3px;font-weight:600}
+.home-card{background:var(--sur);border-radius:var(--rad);box-shadow:var(--sh);padding:14px;margin-bottom:12px}
+.home-card-hd{display:flex;align-items:center;gap:7px;font-size:15px;font-weight:700;margin-bottom:4px}
+.home-card-hd .see-all{margin-left:auto;font-size:13px;color:var(--p);font-weight:600;background:none;border:none;white-space:nowrap}
+.home-row{display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--br);cursor:pointer}
+.home-row:first-of-type{border-top:none}
+.home-row-info{flex:1;min-width:0}
+.home-row-name{font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.home-row-sub{font-size:12px;color:var(--t2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.home-row-right{font-size:12.5px;font-weight:700;white-space:nowrap}
+.home-empty{font-size:13.5px;color:var(--t3);padding:10px 0 4px;text-align:center}
 
 /* Detail page */
 .det-header{background:var(--sur);border-radius:var(--rad);padding:16px;box-shadow:var(--sh);margin-bottom:12px;display:flex;align-items:center;gap:14px}
@@ -347,6 +373,44 @@ textarea.form-input{resize:vertical;min-height:70px}
 <div id="page-location-detail" class="page">
   <div class="bar" id="bar-location-detail"></div>
   <div class="scroll" id="content-location-detail"></div>
+</div>
+
+<!-- ============ PAGE: HOME ============ -->
+<div id="page-home" class="page">
+  <div class="bar" id="bar-home"></div>
+  <div class="scroll" id="content-home"></div>
+</div>
+
+<!-- ============ PAGE: ALERTS ============ -->
+<div id="page-alerts" class="page">
+  <div class="bar" id="bar-alerts"></div>
+  <div class="scroll" id="content-alerts"></div>
+</div>
+
+<!-- ============ PAGE: LOCATIONS ============ -->
+<div id="page-locations" class="page">
+  <div class="bar" id="bar-locations"></div>
+  <div class="scroll" id="content-locations"></div>
+</div>
+
+<!-- ============ BOTTOM NAV ============ -->
+<div class="bottom-nav" id="bottom-nav">
+  <button class="bnav-btn" data-page="home" onclick="navigate('home')">
+    <span class="bnav-badge" id="bnav-badge" style="display:none"></span>
+    <svg viewBox="0 0 24 24"><use href="#ic-home"/></svg><span>Home</span>
+  </button>
+  <button class="bnav-btn" data-page="patients" onclick="navigate('patients')">
+    <svg viewBox="0 0 24 24"><use href="#ic-users"/></svg><span>Pazienti</span>
+  </button>
+  <button class="bnav-scan" onclick="navigate('scan')" title="Scansiona">
+    <svg viewBox="0 0 24 24"><use href="#ic-scan"/></svg>
+  </button>
+  <button class="bnav-btn" data-page="locations" onclick="navigate('locations')">
+    <svg viewBox="0 0 24 24"><use href="#ic-db"/></svg><span>Depositi</span>
+  </button>
+  <button class="bnav-btn" data-page="settings" onclick="navigate('settings')">
+    <svg viewBox="0 0 24 24"><use href="#ic-cog"/></svg><span>Altro</span>
+  </button>
 </div>
 
 <!-- ============ PAGE: WAITING ============ -->
