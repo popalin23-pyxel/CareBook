@@ -2451,8 +2451,9 @@ function renderScan() {
     <div id="scan-result"></div>
     <div class="section-box" style="margin-top:14px">
       <div style="font-size:14px;font-weight:700;margin-bottom:4px">📦 ${T('Scatole senza codice a barre?','Boxes without a barcode?')}</div>
-      <div style="font-size:13px;color:var(--t2);margin-bottom:10px">${T('Crea un\'etichetta interna, stampala e attaccala sul cassetto o ripiano: poi si scansiona come un codice normale.','Create an internal label, print it and stick it on the drawer or shelf: then scan it like a normal code.')}</div>
-      <button class="btn-secondary" style="margin-top:0" onclick="showLabelsModal()">${T('Gestisci / stampa etichette','Manage / print labels')}</button>
+      <div style="font-size:13px;color:var(--t2);margin-bottom:10px">${T('Fai una foto al fronte della scatola e l\'app riconosce il nome, oppure crea un\'etichetta interna da stampare e attaccare sul cassetto.','Take a photo of the box front and the app recognizes the name, or create an internal label to print and stick on the drawer.')}</div>
+      <button class="btn-primary" style="margin-top:0" onclick="ocrPickPhoto()">📷 ${T('Riconosci dalla foto','Recognize from photo')}</button>
+      <button class="btn-secondary" onclick="showLabelsModal()">${T('Gestisci / stampa etichette','Manage / print labels')}</button>
     </div>`;
   if (camSupported) startScanner();
   setTimeout(() => g('scan-input')?.focus(), 200);
@@ -2652,6 +2653,154 @@ function closeScanModal() {
   _scanPaused = false;
   _scanLabelFlow = false;
   setTimeout(() => g('scan-input')?.focus(), 100);
+}
+
+// ── Riconoscimento da foto (OCR) ────────────────────────────
+let _ocrWorker = null;
+let _ocrBusy = false;
+let _ocrCands = [];
+
+function ocrPickPhoto() {
+  if (_ocrBusy) return;
+  const inp = document.createElement('input');
+  inp.type = 'file';
+  inp.accept = 'image/*';
+  inp.capture = 'environment';
+  inp.onchange = () => { if (inp.files && inp.files[0]) runOcr(inp.files[0]); };
+  inp.click();
+}
+
+function ocrStatus(msg) {
+  const res = g('scan-result');
+  if (res) res.innerHTML = `<div class="section-box" style="text-align:center;color:var(--t2);font-size:14px">${msg}</div>`;
+}
+
+async function ensureOcrWorker() {
+  if (_ocrWorker) return _ocrWorker;
+  if (typeof Tesseract === 'undefined') {
+    ocrStatus('⏳ ' + T('Scarico il lettore di testo (solo la prima volta, poi resta nel telefono)...','Downloading text reader (first time only)...'));
+    await new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+      s.onload = resolve;
+      s.onerror = () => reject(new Error('download-failed'));
+      document.head.appendChild(s);
+    });
+  }
+  _ocrWorker = await Tesseract.createWorker('ita');
+  return _ocrWorker;
+}
+
+function ocrLoadImage(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const max = 1400;
+      const sc = Math.min(1, max / Math.max(img.width, img.height));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.width * sc);
+      c.height = Math.round(img.height * sc);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      resolve(c);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('bad-image')); };
+    img.src = url;
+  });
+}
+
+async function runOcr(file) {
+  _ocrBusy = true;
+  _scanPaused = true;
+  try {
+    const img = await ocrLoadImage(file);
+    const worker = await ensureOcrWorker();
+    ocrStatus('🔎 ' + T('Leggo il testo sulla scatola...','Reading text on the box...'));
+    const { data } = await worker.recognize(img);
+    const cands = ocrMatchCandidates((data && data.text) || '');
+    showOcrResults(cands);
+  } catch(e) {
+    ocrStatus('⚠ ' + T('Riconoscimento non riuscito. Serve la connessione la prima volta; riprova con una foto nitida e dritta del fronte della scatola.','Recognition failed. Connection needed first time; retry with a sharp, straight photo of the box front.'));
+    _scanPaused = false;
+  }
+  _ocrBusy = false;
+}
+
+function ocrMatchCandidates(text) {
+  const norm = s => (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9,.]/g, ' ').replace(/\s+/g, ' ').trim();
+  const t = ' ' + norm(text) + ' ';
+  if (t.trim().length < 3) return [];
+  const seen = new Set();
+  const cands = [];
+  const addCand = (name) => {
+    const key = norm(name);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    const words = key.split(' ').filter(w => w.length >= 2);
+    if (!words.length) return;
+    let matched = 0, numTot = 0, numOk = 0;
+    words.forEach(w => {
+      const isNum = /\d/.test(w);
+      if (isNum) numTot++;
+      const hit = t.includes(' ' + w + ' ') || (w.length >= 5 && t.includes(w));
+      if (hit) { matched++; if (isNum) numOk++; }
+    });
+    let score = matched / words.length;
+    // Il nome commerciale (prima parola) deve comparire nella foto
+    if (!(t.includes(' ' + words[0] + ' ') || (words[0].length >= 5 && t.includes(words[0])))) score *= 0.2;
+    // Se il nome ha un dosaggio che nella foto non compare, penalizza (rischio dosaggio sbagliato)
+    if (numTot > 0 && numOk === 0) score *= 0.4;
+    if (score >= 0.45) cands.push({ name, score });
+  };
+  Object.values(D.barcodes || {}).forEach(b => addCand(b.name));
+  D.patients.forEach(p => (p.medicines || []).forEach(m => addCand(m.name)));
+  D.medicineDb.forEach(m => addCand(m.name));
+  if (typeof BUILTIN_MEDS !== 'undefined') BUILTIN_MEDS.forEach(b => addCand(b[0]));
+  cands.sort((a, b) => b.score - a.score);
+  return cands.slice(0, 5);
+}
+
+function showOcrResults(cands) {
+  const res = g('scan-result');
+  if (res) res.innerHTML = '';
+  if (!cands.length) {
+    ocrStatus('⚠ ' + T('Nessun prodotto riconosciuto. Avvicinati e inquadra il nome grande sul fronte della scatola.','No product recognized. Get closer and frame the big name on the box front.'));
+    _scanPaused = false;
+    return;
+  }
+  _ocrCands = cands;
+  const rows = cands.map((c, i) => `
+    <div class="autocomplete-item" style="display:flex;align-items:center;gap:10px;border:1.5px solid var(--br);border-radius:10px;margin-bottom:8px" onclick="ocrPick(${i})">
+      <div style="flex:1;font-size:15px;font-weight:600">${escHtml(c.name)}</div>
+      <span style="font-size:12px;font-weight:700;color:${c.score >= 0.8 ? 'var(--p)' : 'var(--w)'}">${Math.round(c.score * 100)}%</span>
+    </div>`).join('');
+  showModal(`<div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:60;display:flex;align-items:flex-end" onclick="closeScanModal()">
+    <div style="background:var(--sur);width:100%;max-width:600px;margin:0 auto;border-radius:20px 20px 0 0;padding:20px;max-height:85vh;overflow-y:auto" onclick="event.stopPropagation()">
+      <div style="font-size:17px;font-weight:700;margin-bottom:4px">${T('È uno di questi?','Is it one of these?')}</div>
+      <div style="font-size:13px;color:var(--t2);margin-bottom:14px">${T('Tocca il prodotto giusto. Controlla bene il dosaggio!','Tap the right product. Double-check the dosage!')}</div>
+      ${rows}
+      <button class="btn-secondary" onclick="closeScanModal();ocrPickPhoto()">📷 ${T('Rifai la foto','Retake photo')}</button>
+      <button class="btn-secondary" onclick="closeScanModal()">${T('Annulla','Cancel')}</button>
+    </div>
+  </div>`);
+}
+
+function ocrPick(i) {
+  const c = _ocrCands[i];
+  if (!c) return;
+  const entry = Object.entries(D.barcodes || {}).find(([, b]) => b.name.toLowerCase() === c.name.toLowerCase());
+  closeModal();
+  if (entry) {
+    _scanCurrentCode = entry[0];
+    showScanActionModal();
+  } else {
+    // Prodotto nuovo: crea un codice interno con il nome già compilato
+    createInternalLabel();
+    _scanLabelFlow = false; // dopo il salvataggio: vai al carico/scarico, non alla lista etichette
+    const inp = g('scan-assoc-name');
+    if (inp) inp.value = c.name;
+  }
 }
 
 // ── Etichette interne (per scatole senza codice a barre) ────
