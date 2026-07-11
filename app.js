@@ -130,7 +130,31 @@ function navigate(page, params) {
   const el = document.getElementById('page-' + page);
   if (el) el.classList.add('active');
   renderPage(page);
+  updateBottomNav(page);
   window.scrollTo(0, 0);
+}
+
+function updateBottomNav(page) {
+  const nav = g('bottom-nav');
+  if (!nav) return;
+  const hidden = ['login', 'register', 'waiting', 'super-admin'].includes(page);
+  nav.classList.toggle('visible', !hidden);
+  if (hidden) return;
+  const groups = {
+    home: ['home', 'alerts', 'calendar', 'db', 'add-db-med', 'search'],
+    patients: ['patients', 'patient-detail', 'add-patient', 'add-med', 'add-visit'],
+    locations: ['locations', 'location-detail'],
+    settings: ['settings']
+  };
+  nav.querySelectorAll('.bnav-btn').forEach(b => {
+    b.classList.toggle('active', (groups[b.dataset.page] || []).includes(page));
+  });
+  const badge = g('bnav-badge');
+  if (badge) {
+    const n = getLowMeds().length + getExpiringItems().length;
+    badge.textContent = n > 99 ? '99+' : n;
+    badge.style.display = n ? 'flex' : 'none';
+  }
 }
 
 function back() {
@@ -139,22 +163,28 @@ function back() {
     'add-patient': S.patientId ? 'patient-detail' : 'patients',
     'add-med': 'patient-detail',
     'add-visit': 'patient-detail',
-    'calendar': 'patients',
-    'scan': 'patients',
-    'location-detail': 'patients',
-    'db': 'patients',
+    'patients': 'home',
+    'calendar': 'home',
+    'scan': 'home',
+    'alerts': 'home',
+    'locations': 'home',
+    'location-detail': 'locations',
+    'db': 'home',
     'add-db-med': 'db',
-    'settings': 'patients',
-    'search': 'patients',
+    'settings': 'home',
+    'search': 'home',
     'register': 'login',
     'waiting': 'login',
-    'super-admin': _fbFacilityId ? 'patients' : 'login'
+    'super-admin': _fbFacilityId ? 'home' : 'login'
   };
-  navigate(map[S.page] || 'patients');
+  navigate(map[S.page] || 'home');
 }
 
 function renderPage(page) {
   const renders = {
+    'home': renderHome,
+    'alerts': renderAlerts,
+    'locations': renderLocationsPage,
     'patients': renderPatients,
     'patient-detail': renderPatientDetail,
     'add-patient': renderAddPatient,
@@ -290,11 +320,11 @@ function getExpiringItems() {
   const out = [];
   D.patients.forEach(pt => (pt.medicines || []).forEach(m => {
     const st = expiryStatus(m.expiry);
-    if (st && st.cls !== 'ok') out.push({icon: '👤', where: pt.name, name: m.name, expiry: m.expiry, st});
+    if (st && st.cls !== 'ok') out.push({icon: '👤', where: pt.name, name: m.name, expiry: m.expiry, st, ptId: pt.id});
   }));
   (D.locations || []).forEach(l => (l.items || []).forEach(it => {
     const st = expiryStatus(it.expiry);
-    if (st && st.cls !== 'ok') out.push({icon: '📦', where: l.name, name: it.name, expiry: it.expiry, st});
+    if (st && st.cls !== 'ok') out.push({icon: '📦', where: l.name, name: it.name, expiry: it.expiry, st, locId: l.id});
   }));
   return out.sort((a, b) => a.st.days - b.st.days);
 }
@@ -336,7 +366,7 @@ function renderSearch() {
   const q = S.searchGlobal || '';
   el.innerHTML = `
     <div class="bar">
-      <button class="bar-back" onclick="navigate('patients')">${svgIcon('ic-arrow-left',22)}</button>
+      <button class="bar-back" onclick="back()">${svgIcon('ic-arrow-left',22)}</button>
       <span class="bar-title">${T('Ricerca','Search')}</span>
     </div>
     <div class="scroll">
@@ -510,7 +540,7 @@ async function handleAuthChange(user) {
 function setupFbListeners() {
   if (_fbUnsubData) _fbUnsubData();
   if (!_fbFacilityId) return;
-  const LIVE_PAGES = ['patients', 'patient-detail', 'calendar', 'db', 'settings', 'search'];
+  const LIVE_PAGES = ['home', 'alerts', 'locations', 'location-detail', 'patients', 'patient-detail', 'calendar', 'db', 'settings', 'search'];
   _fbUnsubData = db.collection('appData').doc(_fbFacilityId).onSnapshot(snap => {
     if (snap.exists) {
       const data = snap.data();
@@ -525,14 +555,15 @@ function setupFbListeners() {
       D = init;
     }
     if (['login', 'register', 'waiting', 'super-admin'].includes(S.page)) {
-      navigate('patients');
+      navigate('home');
       checkPinOnStart();
     } else if (LIVE_PAGES.includes(S.page)) {
       renderPage(S.page);
+      updateBottomNav(S.page);
     }
   }, err => {
     console.error('Firestore error:', err);
-    if (['login', 'register', 'waiting', 'super-admin'].includes(S.page)) navigate('patients');
+    if (['login', 'register', 'waiting', 'super-admin'].includes(S.page)) navigate('home');
   });
 }
 
@@ -669,7 +700,7 @@ function renderSuperAdmin() {
   if (!el) return;
   el.innerHTML = `
     <div class="bar">
-      ${_fbFacilityId ? `<button class="bar-back" onclick="navigate('patients')">${svgIcon('ic-arrow-left',22)}</button>` : ''}
+      ${_fbFacilityId ? `<button class="bar-back" onclick="navigate('home')">${svgIcon('ic-arrow-left',22)}</button>` : ''}
       <span class="bar-title" style="flex:1">⚡ Super Admin</span>
       <div class="bar-icons">
         <button class="ib" style="color:var(--r);font-size:12px;font-weight:700" onclick="doLogout()">Esci</button>
@@ -872,16 +903,11 @@ function renderPatients() {
       <div style="font-size:13px;color:var(--t2)">${_fbFacilityName ? `🏥 ${escHtml(_fbFacilityName)}` : T('Gestisci pazienti e medicinali','Manage patients and medicines')}</div>
     </div>
     <div class="bar-icons">
-      ${isSuperAdmin() ? `<button class="ib" onclick="navigate('super-admin')" title="Pannello Admin" style="font-size:18px">⚡</button>` : ''}
-      ${canEdit() ? `<button class="ib" onclick="navigate('scan')" title="Scansiona codice">${svgIcon('ic-scan')}</button>` : ''}
       <button class="ib" onclick="navigate('search')" title="Ricerca">${svgIcon('ic-search')}</button>
       <button class="ib" onclick="navigate('calendar')" title="Calendario">${svgIcon('ic-cal')}</button>
-      <button class="ib" onclick="navigate('db')" title="Database">${svgIcon('ic-db')}</button>
-      <button class="ib" onclick="navigate('settings')" title="Impostazioni">${svgIcon('ic-cog')}</button>
     </div>`;
 
   // Content
-  const low = getLowMeds();
   let patients = [...D.patients];
 
   // Search filter
@@ -924,20 +950,17 @@ function renderPatients() {
       <button class="pill ${S.filterAlerts?'active':''}" onclick="S.filterAlerts=!S.filterAlerts;renderPatientsList()" style="margin-left:auto">${T('Solo avvisi','Only alerts')}</button>
     </div>
 
-    <div id="patients-list"></div>
-    <div id="locations-sec"></div>`;
+    <div id="patients-list"></div>`;
 
   document.getElementById('content-patients').innerHTML = html;
   const patFab = document.querySelector('#page-patients .fab');
   if (patFab) patFab.style.display = canEdit() ? '' : 'none';
   renderPatientsList();
-  renderLocationsSection();
 }
 
 function renderPatientsList() {
   const el = document.getElementById('patients-list');
   if (!el) return;
-  const low = getLowMeds();
   let patients = [...D.patients];
   const q = S.search.toLowerCase();
   if (q) {
@@ -953,43 +976,6 @@ function renderPatientsList() {
   else if (S.sort === 'avvisi') patients.sort((a,b) => (hasAlert(b)?1:0)-(hasAlert(a)?1:0));
 
   let html = '';
-
-  // Low meds banner
-  if (!q && low.length > 0) {
-    html += `<div class="alert-banner" onclick="S.sort='avvisi';S.filterAlerts=true;renderPatientsList()">
-      <div class="alert-banner-hd">${svgIcon('ic-clock',15)} ${T(`Da ricaricare (${low.length})`, `To restock (${low.length})`)}
-        <span style="font-size:12px;font-weight:400;margin-left:4px">${T('Tocca per visualizzarli','Tap to view')}</span>
-      </div>`;
-    low.forEach(({patient: pt, med, status}) => {
-      html += `<div class="alert-item">
-        <div class="alert-item-dot"></div>
-        <div class="alert-item-info">
-          <div class="alert-item-name">${escHtml(med.name)}</div>
-          <div class="alert-item-sub">${escHtml(pt.name)} • ${T('Stanza','Room')} ${escHtml(pt.room||'?')}</div>
-        </div>
-        <div class="alert-item-days">${status.label}</div>
-      </div>`;
-    });
-    html += `</div>`;
-  }
-
-  // Expiring products banner
-  const expiring = getExpiringItems();
-  if (!q && expiring.length > 0) {
-    html += `<div class="alert-banner" style="border-color:#e5a0a0;background:#fff5f5">
-      <div class="alert-banner-hd" style="color:var(--r)">⏰ ${T(`In scadenza (${expiring.length})`, `Expiring (${expiring.length})`)}</div>`;
-    expiring.forEach(e => {
-      html += `<div class="alert-item" style="border-top-color:#e5a0a030">
-        <div class="alert-item-dot" style="border-color:var(--r)"></div>
-        <div class="alert-item-info">
-          <div class="alert-item-name">${escHtml(e.name)}</div>
-          <div class="alert-item-sub">${e.icon} ${escHtml(e.where)} • ${T('scad.','exp.')} ${fmtExpiry(e.expiry)}</div>
-        </div>
-        <div class="alert-item-days" style="color:var(--r)">${e.st.label}</div>
-      </div>`;
-    });
-    html += `</div>`;
-  }
 
   // Patients list
   if (patients.length === 0) {
@@ -1328,7 +1314,7 @@ function deletePatient(id) {
   D.patients = D.patients.filter(p => p.id !== id);
   save();
   closeModal();
-  navigate('patients');
+  navigate('home');
 }
 
 function confirmDeleteVisit(visitId) {
@@ -1892,7 +1878,7 @@ function saveVisit(existingId) {
 // ── PAGE: Calendar ──────────────────────────────────────────
 function renderCalendar() {
   document.getElementById('bar-calendar').innerHTML = `
-    <button class="bar-back" onclick="navigate('patients')">${svgIcon('ic-arrow-left',22)}</button>
+    <button class="bar-back" onclick="back()">${svgIcon('ic-arrow-left',22)}</button>
     <span class="bar-title">${T('Calendario','Calendar')}</span>`;
 
   const d = S.calDate;
@@ -2048,7 +2034,7 @@ function goToday() {
 // ── PAGE: Medicine Database ─────────────────────────────────
 function renderDb() {
   document.getElementById('bar-db').innerHTML = `
-    <button class="bar-back" onclick="navigate('patients')">${svgIcon('ic-arrow-left',22)}</button>
+    <button class="bar-back" onclick="back()">${svgIcon('ic-arrow-left',22)}</button>
     <span class="bar-title">${T('Database medicinali','Medicine database')}</span>`;
 
   document.getElementById('content-db').innerHTML = `
@@ -2223,7 +2209,7 @@ function saveDbMed(existingId) {
 // ── PAGE: Settings ──────────────────────────────────────────
 function renderSettings() {
   document.getElementById('bar-settings').innerHTML = `
-    <button class="bar-back" onclick="navigate('patients')">${svgIcon('ic-arrow-left',22)}</button>
+    <button class="bar-back" onclick="back()">${svgIcon('ic-arrow-left',22)}</button>
     <span class="bar-title">${T('Impostazioni','Settings')}</span>
     <div class="bar-icons">
       <button class="ib" style="color:var(--r);font-size:12px;font-weight:700;padding:4px 8px" onclick="doLogout()">${T('Esci','Logout')}</button>
@@ -2772,18 +2758,155 @@ function closeScanModal() {
   setTimeout(() => g('scan-input')?.focus(), 100);
 }
 
-// ── Depositi / magazzino ────────────────────────────────────
-function renderLocationsSection() {
-  const el = g('locations-sec');
-  if (!el) return;
-  const locs = D.locations || [];
-  if (!locs.length && !canEdit()) { el.innerHTML = ''; return; }
-  el.innerHTML = `
-    <div class="sec-hd" style="display:flex;align-items:center">
-      <span>📦 ${T('Depositi & magazzino','Storage & warehouse')}</span>
-      ${canEdit() ? `<button class="add-link" style="margin-left:auto;text-transform:none;letter-spacing:0" onclick="addLocation()">+ ${T('Nuovo deposito','New storage')}</button>` : ''}
+// ── PAGE: Home dashboard ────────────────────────────────────
+function renderHome() {
+  const op = activeOp();
+  const low = getLowMeds();
+  const expiring = getExpiringItems();
+  const nAlerts = low.length + expiring.length;
+
+  g('bar-home').innerHTML = `
+    <div style="flex:1">
+      <div style="font-size:22px;font-weight:800">CareStock</div>
+      <div style="font-size:13px;color:var(--t2)">${_fbFacilityName ? '🏥 ' + escHtml(_fbFacilityName) + ' • ' : ''}<span onclick="showOpDropdown()" style="cursor:pointer"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${op.color}"></span> ${escHtml(op.name)} ▾</span></div>
     </div>
-    ${locs.map(l => {
+    <div class="bar-icons">
+      ${isSuperAdmin() ? `<button class="ib" onclick="navigate('super-admin')" title="Pannello Admin" style="font-size:18px">⚡</button>` : ''}
+      <button class="ib" onclick="navigate('search')" title="Ricerca">${svgIcon('ic-search')}</button>
+      <button class="ib" onclick="navigate('calendar')" title="Calendario">${svgIcon('ic-cal')}</button>
+      <button class="ib" onclick="navigate('db')" title="Database">${svgIcon('ic-db')}</button>
+    </div>`;
+
+  // Notifiche: le 3 più urgenti (scorte + scadenze, ordinate per urgenza)
+  const notif = [
+    ...low.map(x => ({days: x.status.days ?? 0, icon: '💊', name: x.med.name, sub: '👤 ' + x.patient.name, right: x.status.label, color: x.status.cls === 'expired' ? 'var(--r)' : 'var(--w)'})),
+    ...expiring.map(e => ({days: e.st.days, icon: '⏰', name: e.name, sub: e.icon + ' ' + e.where + ' • ' + T('scad.','exp.') + ' ' + fmtExpiry(e.expiry), right: e.st.label, color: 'var(--r)'}))
+  ].sort((a, b) => a.days - b.days).slice(0, 3);
+
+  // Visite di oggi
+  const today = todayISO();
+  const todayVisits = [];
+  D.patients.forEach(pt => (pt.visits || []).forEach(v => {
+    if ((v.date || '').slice(0, 10) === today) todayVisits.push({pt, v});
+  }));
+  todayVisits.sort((a, b) => a.v.date.localeCompare(b.v.date));
+
+  const locs = D.locations || [];
+
+  g('content-home').innerHTML = `
+    <div class="stat-row">
+      <div class="stat-tile" onclick="navigate('patients')">
+        <div class="num">${D.patients.length}</div><div class="lbl">${T('Pazienti','Patients')}</div>
+      </div>
+      <div class="stat-tile" onclick="navigate('alerts')" ${low.length ? 'style="border-color:var(--w)"' : ''}>
+        <div class="num" style="color:${low.length ? 'var(--w)' : 'var(--t3)'}">${low.length}</div><div class="lbl">${T('Da ricaricare','To restock')}</div>
+      </div>
+      <div class="stat-tile" onclick="navigate('alerts')" ${expiring.length ? 'style="border-color:var(--r)"' : ''}>
+        <div class="num" style="color:${expiring.length ? 'var(--r)' : 'var(--t3)'}">${expiring.length}</div><div class="lbl">${T('In scadenza','Expiring')}</div>
+      </div>
+    </div>
+
+    <div class="home-card">
+      <div class="home-card-hd">🔔 ${T('Notifiche','Alerts')} ${nAlerts ? `<span class="cnt-badge">${nAlerts}</span>` : ''}
+        <button class="see-all" onclick="navigate('alerts')">${T('Vedi tutte','See all')} ›</button>
+      </div>
+      ${notif.length ? notif.map(n => `
+        <div class="home-row" onclick="navigate('alerts')">
+          <span style="font-size:17px">${n.icon}</span>
+          <div class="home-row-info">
+            <div class="home-row-name">${escHtml(n.name)}</div>
+            <div class="home-row-sub">${escHtml(n.sub)}</div>
+          </div>
+          <span class="home-row-right" style="color:${n.color}">${n.right}</span>
+        </div>`).join('') : `<div class="home-empty">${T('Nessun avviso, tutto in ordine 🎉','No alerts, all good 🎉')}</div>`}
+    </div>
+
+    <div class="home-card">
+      <div class="home-card-hd">📦 ${T('Depositi','Storage')}
+        <button class="see-all" onclick="navigate('locations')">${T('Vedi tutti','See all')} ›</button>
+      </div>
+      ${locs.length ? locs.slice(0, 3).map(l => {
+        const nExp = (l.items || []).filter(it => { const ex = expiryStatus(it.expiry); return ex && ex.cls !== 'ok'; }).length;
+        return `
+        <div class="home-row" onclick="navigate('location-detail',{locationId:'${l.id}'})">
+          <span style="font-size:17px">📦</span>
+          <div class="home-row-info">
+            <div class="home-row-name">${escHtml(l.name)}</div>
+            <div class="home-row-sub">${(l.items||[]).length} ${T('prodotti','products')}</div>
+          </div>
+          ${nExp ? `<span class="home-row-right" style="color:var(--r)">⏰ ${nExp}</span>` : '<span class="chevron">›</span>'}
+        </div>`;
+      }).join('') : `<div class="home-empty">${T('Nessun deposito ancora','No storage yet')}${canEdit() ? `<br><button class="add-link" onclick="addLocation()" style="margin-top:6px;cursor:pointer">+ ${T('Crea il primo deposito','Create the first storage')}</button>` : ''}</div>`}
+    </div>
+
+    <div class="home-card">
+      <div class="home-card-hd">📅 ${T('Oggi','Today')} ${todayVisits.length ? `<span class="cnt-badge" style="background:var(--p)">${todayVisits.length}</span>` : ''}
+        <button class="see-all" onclick="navigate('calendar')">${T('Calendario','Calendar')} ›</button>
+      </div>
+      ${todayVisits.length ? todayVisits.map(({pt, v}) => `
+        <div class="home-row" onclick="navigate('patient-detail',{patientId:'${pt.id}'})">
+          <span style="font-size:15px;font-weight:800;color:var(--p);min-width:44px">${new Date(v.date).toTimeString().slice(0,5)}</span>
+          <div class="home-row-info">
+            <div class="home-row-name">${escHtml(v.title)}</div>
+            <div class="home-row-sub">👤 ${escHtml(pt.name)}${v.location ? ' • ' + escHtml(v.location) : ''}</div>
+          </div>
+          <span class="chevron">›</span>
+        </div>`).join('') : `<div class="home-empty">${T('Nessuna visita oggi','No visits today')}</div>`}
+    </div>`;
+}
+
+// ── PAGE: Notifiche ─────────────────────────────────────────
+function renderAlerts() {
+  const low = getLowMeds();
+  const expiring = getExpiringItems();
+
+  g('bar-alerts').innerHTML = `
+    <button class="bar-back" onclick="back()">${svgIcon('ic-arrow-left',22)}</button>
+    <span class="bar-title">🔔 ${T('Notifiche','Alerts')}</span>`;
+
+  let html = '';
+
+  html += `<div class="sec-hd">⚠ ${T('Da ricaricare','To restock')} (${low.length})</div>`;
+  if (low.length) {
+    html += low.map(({patient: pt, med, status}) => `
+      <div class="patient-card" onclick="navigate('patient-detail',{patientId:'${pt.id}'})" style="cursor:pointer;${status.cls === 'expired' ? 'border-color:var(--r)' : 'border-color:var(--w)'}">
+        <div class="avatar" style="background:${status.cls === 'expired' ? '#fff5f5' : 'var(--wl)'};font-size:18px">💊</div>
+        <div class="patient-info">
+          <div class="patient-name">${escHtml(med.name)}</div>
+          <div class="patient-sub">👤 ${escHtml(pt.name)} • ${T('Stanza','Room')} ${escHtml(pt.room || '?')}${med.totalQty != null ? ' • ' + med.totalQty + ' ' + T('rimaste','left') : ''}</div>
+        </div>
+        <span style="font-size:13px;font-weight:700;color:${status.cls === 'expired' ? 'var(--r)' : 'var(--w)'};white-space:nowrap">${status.label}</span>
+      </div>`).join('');
+  } else {
+    html += `<div class="home-empty" style="padding:14px 0">${T('Nessuna scorta in esaurimento 👍','No stock running low 👍')}</div>`;
+  }
+
+  html += `<div class="sec-hd" style="margin-top:22px">⏰ ${T('In scadenza','Expiring')} (${expiring.length})</div>`;
+  if (expiring.length) {
+    html += expiring.map(e => `
+      <div class="patient-card" onclick="${e.ptId ? `navigate('patient-detail',{patientId:'${e.ptId}'})` : `navigate('location-detail',{locationId:'${e.locId}'})`}" style="cursor:pointer;border-color:var(--r)">
+        <div class="avatar" style="background:#fff5f5;font-size:18px">⏰</div>
+        <div class="patient-info">
+          <div class="patient-name">${escHtml(e.name)}</div>
+          <div class="patient-sub">${e.icon} ${escHtml(e.where)} • ${T('scad.','exp.')} ${fmtExpiry(e.expiry)}</div>
+        </div>
+        <span style="font-size:13px;font-weight:700;color:var(--r);white-space:nowrap">${e.st.label}</span>
+      </div>`).join('');
+  } else {
+    html += `<div class="home-empty" style="padding:14px 0">${T('Nessun prodotto in scadenza 👍','Nothing expiring 👍')}</div>`;
+  }
+
+  g('content-alerts').innerHTML = html;
+}
+
+// ── PAGE: Depositi (lista) ──────────────────────────────────
+function renderLocationsPage() {
+  const locs = D.locations || [];
+  g('bar-locations').innerHTML = `
+    <button class="bar-back" onclick="back()">${svgIcon('ic-arrow-left',22)}</button>
+    <span class="bar-title">📦 ${T('Depositi & magazzino','Storage & warehouse')}</span>`;
+  g('content-locations').innerHTML = `
+    ${locs.length ? locs.map(l => {
       const nExp = (l.items || []).filter(it => { const ex = expiryStatus(it.expiry); return ex && ex.cls !== 'ok'; }).length;
       return `
       <div class="patient-card ${nExp ? 'has-alert' : ''}" onclick="navigate('location-detail',{locationId:'${l.id}'})" style="cursor:pointer">
@@ -2794,10 +2917,11 @@ function renderLocationsSection() {
         </div>
         <span class="chevron">›</span>
       </div>`;
-    }).join('')}
-    ${!locs.length ? `<div style="font-size:13px;color:var(--t3);padding:2px 2px 8px">${T('Es. "Deposito 1° piano", "Carrello emergenze", "Armadio 5"...','E.g. "1st floor storage", "Emergency cart", "Cabinet 5"...')}</div>` : ''}`;
+    }).join('') : `<div class="empty">${T('Nessun deposito ancora.','No storage yet.')}<br>${T('Es. "Deposito 1° piano", "Carrello emergenze", "Armadio 5"...','E.g. "1st floor storage", "Emergency cart"...')}</div>`}
+    ${canEdit() ? `<button class="add-med-btn" onclick="addLocation()">+ ${T('Nuovo deposito','New storage')}</button>` : ''}`;
 }
 
+// ── Depositi / magazzino ────────────────────────────────────
 function addLocation() {
   const name = (prompt(T('Nome del deposito (es. Deposito 1° piano, Carrello emergenze, Armadio 5):','Storage name (e.g. 1st floor storage, Emergency cart):')) || '').trim();
   if (!name) return;
@@ -2824,12 +2948,12 @@ function confirmDeleteLocation(id) {
   if (!confirm(T(`Eliminare "${loc.name}" e tutti i suoi prodotti?`, `Delete "${loc.name}" and all its products?`))) return;
   D.locations = D.locations.filter(l => l.id !== id);
   save();
-  navigate('patients');
+  navigate('locations');
 }
 
 function renderLocationDetail() {
   const loc = (D.locations || []).find(l => l.id === S.locationId);
-  if (!loc) { navigate('patients'); return; }
+  if (!loc) { navigate('locations'); return; }
   g('bar-location-detail').innerHTML = `
     <button class="bar-back" onclick="back()">←</button>
     <span class="bar-title">📦 ${escHtml(loc.name)}</span>
@@ -3297,7 +3421,7 @@ function importData() {
         D = parsed;
         save();
         closeModal();
-        navigate('patients');
+        navigate('home');
       } catch(err) {
         alert(T('Errore nella lettura del file.', 'Error reading file.'));
       }
