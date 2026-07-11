@@ -122,6 +122,7 @@ function navigate(page, params) {
     _saUnsubs.forEach(u => u());
     _saUnsubs = [];
   }
+  if (S.page === 'scan' && page !== 'scan') stopScanner();
   if (params) Object.assign(S, params);
   S.page = page;
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
@@ -138,6 +139,7 @@ function back() {
     'add-med': 'patient-detail',
     'add-visit': 'patient-detail',
     'calendar': 'patients',
+    'scan': 'patients',
     'db': 'patients',
     'add-db-med': 'db',
     'settings': 'patients',
@@ -159,6 +161,7 @@ function renderPage(page) {
     'calendar': renderCalendar,
     'db': renderDb,
     'add-db-med': renderAddDbMed,
+    'scan': renderScan,
     'settings': renderSettings,
     'search': renderSearch,
     'waiting': renderWaiting,
@@ -233,6 +236,15 @@ function computeEndDate(startIso, totalQty, dpd, weekDays, monthDays) {
     safety++;
   }
   return d.toISOString().slice(0, 10);
+}
+
+function recalcMedEnd(med) {
+  const dpd = dosePerDay(med);
+  if (med.startDate && dpd && med.totalQty > 0) {
+    const weekDays = med.days && med.days.length > 0 && med.days.length < 7 ? med.days : null;
+    const mDays = med.monthDays && med.monthDays.length > 0 ? med.monthDays : null;
+    med.endDate = computeEndDate(med.startDate, med.totalQty, dpd, mDays ? null : weekDays, mDays);
+  }
 }
 
 function getMedStatus(med) {
@@ -819,6 +831,7 @@ function renderPatients() {
     </div>
     <div class="bar-icons">
       ${isSuperAdmin() ? `<button class="ib" onclick="navigate('super-admin')" title="Pannello Admin" style="font-size:18px">⚡</button>` : ''}
+      ${canEdit() ? `<button class="ib" onclick="navigate('scan')" title="Scansiona codice">${svgIcon('ic-scan')}</button>` : ''}
       <button class="ib" onclick="navigate('search')" title="Ricerca">${svgIcon('ic-search')}</button>
       <button class="ib" onclick="navigate('calendar')" title="Calendario">${svgIcon('ic-cal')}</button>
       <button class="ib" onclick="navigate('db')" title="Database">${svgIcon('ic-db')}</button>
@@ -1099,7 +1112,7 @@ function showMedDetail(medId) {
     restockLog = `<div style="margin-top:6px;border-top:1px solid var(--br);padding-top:8px">`;
     restocks.forEach(r => {
       restockLog += `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px">
-        <span style="color:var(--p);font-weight:700">+${r.qty}</span>
+        <span style="color:${r.qty < 0 ? 'var(--r)' : 'var(--p)'};font-weight:700">${r.qty > 0 ? '+' : ''}${r.qty}</span>
         <span style="color:var(--t2)">${fmtDate(r.date)}${r.note ? ' · ' + escHtml(r.note) : ''}</span>
         ${canEdit() ? `<button onclick="deleteRestock('${medId}','${r.id}')" style="margin-left:auto;background:none;border:none;color:var(--t3);font-size:16px;cursor:pointer">×</button>` : ''}
       </div>`;
@@ -1195,14 +1208,7 @@ function saveRestock(medId) {
   if (!med.restocks) med.restocks = [];
   med.restocks.push({ id: uid(), qty, note, date: new Date().toISOString() });
   med.totalQty = (med.totalQty || 0) + qty;
-
-  // Ricalcola data fine
-  const dpd = dosePerDay(med);
-  if (med.startDate && dpd) {
-    const weekDays = med.days && med.days.length > 0 && med.days.length < 7 ? med.days : null;
-    const mDays = med.monthDays && med.monthDays.length > 0 ? med.monthDays : null;
-    med.endDate = computeEndDate(med.startDate, med.totalQty, dpd, mDays ? null : weekDays, mDays);
-  }
+  recalcMedEnd(med);
 
   save();
   closeRestockForm();
@@ -1218,12 +1224,7 @@ function deleteRestock(medId, restockId) {
   if (!r) return;
   med.totalQty = Math.max(0, (med.totalQty || 0) - r.qty);
   med.restocks = med.restocks.filter(x => x.id !== restockId);
-  const dpd = dosePerDay(med);
-  if (med.startDate && dpd && med.totalQty > 0) {
-    const weekDays = med.days && med.days.length > 0 && med.days.length < 7 ? med.days : null;
-    const mDays = med.monthDays && med.monthDays.length > 0 ? med.monthDays : null;
-    med.endDate = computeEndDate(med.startDate, med.totalQty, dpd, mDays ? null : weekDays, mDays);
-  }
+  recalcMedEnd(med);
   save();
   closeModal();
   showMedDetail(medId);
@@ -2411,6 +2412,233 @@ function showModal(html) {
 
 function closeModal() {
   if (_modalEl) { _modalEl.remove(); _modalEl = null; }
+}
+
+// ── Scanner codici a barre ──────────────────────────────────
+let _scanStream = null;
+let _scanTimer = null;
+let _scanDetector = null;
+let _scanLastCode = '';
+let _scanLastTime = 0;
+let _scanPaused = false;
+let _scanCurrentCode = '';
+let _scanMode = 'add';
+let _scanMatches = [];
+
+function renderScan() {
+  const camSupported = 'BarcodeDetector' in window;
+  g('bar-scan').innerHTML = `
+    <button class="bar-back" onclick="back()">←</button>
+    <span class="bar-title">${T('Scansiona codice','Scan barcode')}</span>`;
+  g('content-scan').innerHTML = `
+    ${camSupported ? `
+    <div style="background:#000;border-radius:var(--rad);overflow:hidden;position:relative;aspect-ratio:4/3;margin-bottom:12px">
+      <video id="scan-video" playsinline muted style="width:100%;height:100%;object-fit:cover"></video>
+      <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none">
+        <div style="width:70%;height:38%;border:3px solid rgba(255,255,255,.85);border-radius:12px"></div>
+      </div>
+      <div id="scan-cam-msg" style="position:absolute;bottom:8px;left:0;right:0;text-align:center;color:#fff;font-size:13px;text-shadow:0 1px 3px #000">${T('Inquadra il codice a barre della scatola','Point at the box barcode')}</div>
+    </div>` : `
+    <div class="allergy-box" style="margin-bottom:12px">${T('Questo browser non supporta la scansione con fotocamera. Puoi comunque usare uno scanner esterno o digitare il codice qui sotto.','This browser does not support camera scanning. You can still use an external scanner or type the code below.')}</div>`}
+    <div class="form-group">
+      <label class="form-label">${T('Scanner esterno o codice manuale','External scanner or manual code')}</label>
+      <input class="form-input" id="scan-input" inputmode="numeric" autocomplete="off"
+        placeholder="${T('Spara con lo scanner o digita il codice...','Scan with the gun or type the code...')}"
+        onkeydown="if(event.key==='Enter'){handleScannedCode(this.value);this.value='';}">
+      <div style="font-size:12px;color:var(--t3);margin-top:4px">${T('Gli scanner USB/Bluetooth scrivono qui da soli e premono Invio.','USB/Bluetooth scanners type here and press Enter automatically.')}</div>
+    </div>
+    <div id="scan-result"></div>`;
+  if (camSupported) startScanner();
+  setTimeout(() => g('scan-input')?.focus(), 200);
+}
+
+async function startScanner() {
+  const video = g('scan-video');
+  if (!video) return;
+  try {
+    _scanDetector = new BarcodeDetector({formats: ['ean_13','ean_8','upc_a','upc_e','code_128','code_39','itf','data_matrix','qr_code']});
+  } catch(e) { _scanDetector = null; }
+  if (!_scanDetector) {
+    const m = g('scan-cam-msg');
+    if (m) m.textContent = T('Lettore non disponibile su questo dispositivo','Reader unavailable on this device');
+    return;
+  }
+  try {
+    _scanStream = await navigator.mediaDevices.getUserMedia({video: {facingMode: 'environment'}, audio: false});
+    video.srcObject = _scanStream;
+    await video.play();
+  } catch(e) {
+    const m = g('scan-cam-msg');
+    if (m) m.textContent = T('Permesso fotocamera negato: consenti la fotocamera nelle impostazioni del sito','Camera permission denied: allow camera in site settings');
+    return;
+  }
+  _scanTimer = setInterval(async () => {
+    if (_scanPaused || !video.videoWidth) return;
+    try {
+      const codes = await _scanDetector.detect(video);
+      if (codes.length > 0 && codes[0].rawValue) {
+        const code = codes[0].rawValue.trim();
+        const now = Date.now();
+        if (code === _scanLastCode && now - _scanLastTime < 4000) return;
+        _scanLastCode = code;
+        _scanLastTime = now;
+        if (navigator.vibrate) navigator.vibrate(80);
+        handleScannedCode(code);
+      }
+    } catch(e) {}
+  }, 350);
+}
+
+function stopScanner() {
+  if (_scanTimer) { clearInterval(_scanTimer); _scanTimer = null; }
+  if (_scanStream) { _scanStream.getTracks().forEach(t => t.stop()); _scanStream = null; }
+  _scanPaused = false;
+}
+
+function handleScannedCode(rawCode) {
+  const code = (rawCode || '').trim();
+  if (!code) return;
+  if (!D.barcodes) D.barcodes = {};
+  _scanCurrentCode = code;
+  _scanPaused = true;
+  if (D.barcodes[code]) showScanActionModal();
+  else showScanAssociateModal();
+}
+
+function showScanAssociateModal(isEdit) {
+  const existing = (D.barcodes || {})[_scanCurrentCode] || {};
+  showModal(`<div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:60;display:flex;align-items:flex-end" onclick="closeScanModal()">
+    <div style="background:var(--sur);width:100%;max-width:600px;margin:0 auto;border-radius:20px 20px 0 0;padding:20px;max-height:85vh;overflow-y:auto" onclick="event.stopPropagation()">
+      <div style="font-size:17px;font-weight:700;margin-bottom:4px">${isEdit ? T('Modifica prodotto','Edit product') : T('Nuovo prodotto scansionato','New scanned product')}</div>
+      <div style="font-size:13px;color:var(--t2);margin-bottom:14px">${T('Codice','Code')}: <strong style="font-variant-numeric:tabular-nums">${escHtml(_scanCurrentCode)}</strong></div>
+      <div class="form-group autocomplete">
+        <label class="form-label">${T('Che prodotto è?','Which product is it?')}</label>
+        <input class="form-input" id="scan-assoc-name" value="${escHtml(existing.name || '')}"
+          placeholder="${T('es. Tachipirina 500 mg','e.g. Tachipirina 500 mg')}"
+          oninput="showScanAutocomplete(this.value)" autocomplete="off">
+        <div class="autocomplete-list" id="scan-autocomplete" style="display:none"></div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">${T('Quante unità contiene una scatola intera? (pastiglie, fiale, pezzi...)','How many units in a full box? (pills, vials, pieces...)')}</label>
+        <input class="form-input" id="scan-assoc-qty" type="number" min="1" step="1" value="${existing.boxQty || ''}"
+          placeholder="${T('es. 28','e.g. 28')}" style="font-size:20px;font-weight:700;text-align:center">
+      </div>
+      <button class="btn-primary" onclick="saveScanAssociation()">${T('Salva','Save')}</button>
+      <button class="btn-secondary" onclick="closeScanModal()">${T('Annulla','Cancel')}</button>
+    </div>
+  </div>`);
+  setTimeout(() => g('scan-assoc-name')?.focus(), 100);
+}
+
+function showScanAutocomplete(val) {
+  const list = g('scan-autocomplete');
+  if (!list) return;
+  if (!val || val.length < 2) { list.style.display = 'none'; return; }
+  const q = val.toLowerCase();
+  const custom = D.medicineDb.filter(m => m.name.toLowerCase().includes(q)).slice(0, 3);
+  const builtin = (typeof BUILTIN_MEDS !== 'undefined') ? BUILTIN_MEDS.filter(b => builtinMatch(b, q)).slice(0, 6) : [];
+  if (!custom.length && !builtin.length) { list.style.display = 'none'; return; }
+  list.innerHTML =
+    custom.map(m => `<div class="autocomplete-item" data-n="${escHtml(m.name)}" onclick="pickScanName(this.dataset.n)">${escHtml(m.name)}</div>`).join('') +
+    builtin.map(b => `<div class="autocomplete-item" data-n="${escHtml(b[0])}" onclick="pickScanName(this.dataset.n)">${escHtml(b[0])}${b[3] ? ` <span style="color:var(--t3);font-size:11px">${escHtml(b[3])}</span>` : ''}</div>`).join('');
+  list.style.display = 'block';
+}
+
+function pickScanName(name) {
+  const i = g('scan-assoc-name');
+  if (i) i.value = name;
+  const l = g('scan-autocomplete');
+  if (l) l.style.display = 'none';
+}
+
+function saveScanAssociation() {
+  const name = g('scan-assoc-name')?.value.trim();
+  const boxQty = parseInt(g('scan-assoc-qty')?.value, 10);
+  if (!name) { alert(T('Inserisci il nome del prodotto','Enter the product name')); return; }
+  if (!boxQty || boxQty <= 0) { alert(T('Inserisci quante unità contiene la scatola','Enter how many units the box contains')); return; }
+  if (!D.barcodes) D.barcodes = {};
+  D.barcodes[_scanCurrentCode] = { name, boxQty };
+  save();
+  showScanActionModal();
+}
+
+function setScanMode(mode) {
+  _scanMode = mode;
+  g('scan-tab-add')?.classList.toggle('active', mode === 'add');
+  g('scan-tab-sub')?.classList.toggle('active', mode === 'sub');
+  const btn = g('scan-ok-btn');
+  if (btn) btn.textContent = mode === 'add' ? T('Carica','Load') : T('Scarica','Unload');
+}
+
+function showScanActionModal() {
+  const info = D.barcodes[_scanCurrentCode];
+  if (!info) return;
+  _scanMode = 'add';
+  _scanMatches = [];
+  D.patients.forEach(pt => (pt.medicines || []).forEach(m => {
+    if (m.name.toLowerCase() === info.name.toLowerCase()) _scanMatches.push({pt, m});
+  }));
+  const options = _scanMatches.map((x, i) =>
+    `<option value="${i}">${escHtml(x.pt.name)} — ${x.m.totalQty != null ? x.m.totalQty + ' ' + T('rimaste','left') : T('scorta non indicata','no stock set')}</option>`
+  ).join('');
+  showModal(`<div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:60;display:flex;align-items:flex-end" onclick="closeScanModal()">
+    <div style="background:var(--sur);width:100%;max-width:600px;margin:0 auto;border-radius:20px 20px 0 0;padding:20px;max-height:85vh;overflow-y:auto" onclick="event.stopPropagation()">
+      <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:14px">
+        <div style="flex:1">
+          <div style="font-size:17px;font-weight:700">${escHtml(info.name)}</div>
+          <div style="font-size:13px;color:var(--t2)">${T('Scatola intera','Full box')}: ${info.boxQty} ${T('unità','units')}</div>
+        </div>
+        <button class="add-link" onclick="closeModal();showScanAssociateModal(true)" style="font-size:13px">${T('Modifica','Edit')}</button>
+      </div>
+      <div class="cal-toggle" style="margin:0 auto 14px">
+        <button class="cal-tab active" id="scan-tab-add" onclick="setScanMode('add')">＋ ${T('Carica','Load')}</button>
+        <button class="cal-tab" id="scan-tab-sub" onclick="setScanMode('sub')">− ${T('Scarica','Unload')}</button>
+      </div>
+      ${_scanMatches.length ? `
+      <div class="form-group">
+        <label class="form-label">${T('Paziente','Patient')}</label>
+        <select class="form-input" id="scan-target">${options}</select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">${T('Quantità','Quantity')}</label>
+        <input class="form-input" id="scan-qty" type="number" min="0.5" step="0.5" value="${info.boxQty}"
+          style="font-size:24px;font-weight:800;text-align:center">
+        <div style="font-size:12px;color:var(--t3);margin-top:4px">${T('OK = scatola intera. Cambia il numero se la scatola è aperta (es. 16).','OK = full box. Change the number if the box is open (e.g. 16).')}</div>
+      </div>
+      <button class="btn-primary" id="scan-ok-btn" onclick="applyScanAction()">${T('Carica','Load')}</button>` : `
+      <div class="allergy-box" style="margin-bottom:10px">${T('Nessun paziente ha questo prodotto in terapia. Aggiungilo prima dalla scheda del paziente, poi riscansiona.','No patient has this product. Add it from the patient page first, then rescan.')}</div>`}
+      <button class="btn-secondary" onclick="closeScanModal()">${T('Annulla','Cancel')}</button>
+    </div>
+  </div>`);
+}
+
+function applyScanAction() {
+  const idx = parseInt(g('scan-target')?.value, 10);
+  const target = _scanMatches[idx];
+  if (!target) return;
+  const qty = parseFloat(g('scan-qty')?.value);
+  if (!qty || qty <= 0) { alert(T('Inserisci una quantità valida','Enter a valid quantity')); return; }
+  const med = target.m;
+  const signed = _scanMode === 'add' ? qty : -qty;
+  if (!med.restocks) med.restocks = [];
+  med.restocks.push({ id: uid(), qty: signed, note: T('Scansione codice','Barcode scan'), date: new Date().toISOString() });
+  med.totalQty = Math.max(0, (med.totalQty || 0) + signed);
+  recalcMedEnd(med);
+  save();
+  closeScanModal();
+  const res = g('scan-result');
+  if (res) {
+    res.innerHTML = `<div class="section-box" style="border:1.5px solid ${_scanMode === 'add' ? 'var(--p)' : 'var(--w)'}">
+      <div style="font-weight:700;color:${_scanMode === 'add' ? 'var(--p)' : 'var(--w)'}">${_scanMode === 'add' ? '+' : '−'}${qty} ${escHtml(D.barcodes[_scanCurrentCode].name)}</div>
+      <div style="font-size:13px;color:var(--t2)">${escHtml(target.pt.name)} — ${T('ora','now')} ${med.totalQty} ${T('rimaste','left')}</div>
+    </div>`;
+  }
+}
+
+function closeScanModal() {
+  closeModal();
+  _scanPaused = false;
+  setTimeout(() => g('scan-input')?.focus(), 100);
 }
 
 // ── Export / Import ─────────────────────────────────────────
