@@ -64,7 +64,8 @@ const S = {
   calSelected: new Date(),
   dbSearch: '',
   dbPage: 0,
-  searchGlobal: ''
+  searchGlobal: '',
+  locationId: null
 };
 
 // ── Data ────────────────────────────────────────────────────
@@ -140,6 +141,7 @@ function back() {
     'add-visit': 'patient-detail',
     'calendar': 'patients',
     'scan': 'patients',
+    'location-detail': 'patients',
     'db': 'patients',
     'add-db-med': 'db',
     'settings': 'patients',
@@ -162,6 +164,7 @@ function renderPage(page) {
     'db': renderDb,
     'add-db-med': renderAddDbMed,
     'scan': renderScan,
+    'location-detail': renderLocationDetail,
     'settings': renderSettings,
     'search': renderSearch,
     'waiting': renderWaiting,
@@ -882,12 +885,14 @@ function renderPatients() {
       <button class="pill ${S.filterAlerts?'active':''}" onclick="S.filterAlerts=!S.filterAlerts;renderPatientsList()" style="margin-left:auto">${T('Solo avvisi','Only alerts')}</button>
     </div>
 
-    <div id="patients-list"></div>`;
+    <div id="patients-list"></div>
+    <div id="locations-sec"></div>`;
 
   document.getElementById('content-patients').innerHTML = html;
   const patFab = document.querySelector('#page-patients .fab');
   if (patFab) patFab.style.display = canEdit() ? '' : 'none';
   renderPatientsList();
+  renderLocationsSection();
 }
 
 function renderPatientsList() {
@@ -2588,11 +2593,16 @@ function showScanActionModal() {
   _scanMode = 'add';
   _scanMatches = [];
   D.patients.forEach(pt => (pt.medicines || []).forEach(m => {
-    if (m.name.toLowerCase() === info.name.toLowerCase()) _scanMatches.push({pt, m});
+    if (m.name.toLowerCase() === info.name.toLowerCase()) _scanMatches.push({type: 'pt', pt, m});
   }));
-  const options = _scanMatches.map((x, i) =>
-    `<option value="${i}">${escHtml(x.pt.name)} — ${x.m.totalQty != null ? x.m.totalQty + ' ' + T('rimaste','left') : T('scorta non indicata','no stock set')}</option>`
-  ).join('');
+  (D.locations || []).forEach(loc => {
+    const item = (loc.items || []).find(it => it.name.toLowerCase() === info.name.toLowerCase());
+    _scanMatches.push({type: 'loc', loc, item: item || null});
+  });
+  const options = _scanMatches.map((x, i) => {
+    if (x.type === 'pt') return `<option value="${i}">👤 ${escHtml(x.pt.name)} — ${x.m.totalQty != null ? x.m.totalQty + ' ' + T('rimaste','left') : T('scorta non indicata','no stock set')}</option>`;
+    return `<option value="${i}">📦 ${escHtml(x.loc.name)} — ${x.item ? (x.item.qty || 0) + ' ' + T('presenti','in stock') : T('nuovo prodotto qui','new product here')}</option>`;
+  }).join('');
   showModal(`<div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:60;display:flex;align-items:flex-end" onclick="closeScanModal()">
     <div style="background:var(--sur);width:100%;max-width:600px;margin:0 auto;border-radius:20px 20px 0 0;padding:20px;max-height:85vh;overflow-y:auto" onclick="event.stopPropagation()">
       <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:14px">
@@ -2608,7 +2618,7 @@ function showScanActionModal() {
       </div>
       ${_scanMatches.length ? `
       <div class="form-group">
-        <label class="form-label">${T('Paziente','Patient')}</label>
+        <label class="form-label">${T('Dove? (paziente o deposito)','Where? (patient or storage)')}</label>
         <select class="form-input" id="scan-target">${options}</select>
       </div>
       <div class="form-group">
@@ -2618,7 +2628,7 @@ function showScanActionModal() {
         <div style="font-size:12px;color:var(--t3);margin-top:4px">${T('OK = scatola intera. Cambia il numero se la scatola è aperta (es. 16).','OK = full box. Change the number if the box is open (e.g. 16).')}</div>
       </div>
       <button class="btn-primary" id="scan-ok-btn" onclick="applyScanAction()">${T('Carica','Load')}</button>` : `
-      <div class="allergy-box" style="margin-bottom:10px">${T('Nessun paziente ha questo prodotto in terapia. Aggiungilo prima dalla scheda del paziente, poi riscansiona.','No patient has this product. Add it from the patient page first, then rescan.')}</div>`}
+      <div class="allergy-box" style="margin-bottom:10px">${T('Nessun paziente ha questo prodotto in terapia e non ci sono depositi. Aggiungi il farmaco al paziente o crea un deposito dalla pagina principale, poi riscansiona.','No patient has this product and there are no storages. Add the medicine to a patient or create a storage from the main page, then rescan.')}</div>`}
       <button class="btn-secondary" onclick="closeScanModal()">${T('Annulla','Cancel')}</button>
     </div>
   </div>`);
@@ -2630,20 +2640,43 @@ function applyScanAction() {
   if (!target) return;
   const qty = parseFloat(g('scan-qty')?.value);
   if (!qty || qty <= 0) { alert(T('Inserisci una quantità valida','Enter a valid quantity')); return; }
-  const med = target.m;
   const signed = _scanMode === 'add' ? qty : -qty;
-  if (!med.restocks) med.restocks = [];
-  med.restocks.push({ id: uid(), qty: signed, note: T('Scansione codice','Barcode scan'), date: new Date().toISOString() });
-  med.totalQty = Math.max(0, (med.totalQty || 0) + signed);
-  recalcMedEnd(med);
+  const info = D.barcodes[_scanCurrentCode];
+  let destName = '';
+  let newQty = 0;
+  let warnHtml = '';
+
+  if (target.type === 'loc') {
+    const loc = target.loc;
+    if (!loc.items) loc.items = [];
+    let item = target.item;
+    if (!item) {
+      item = { id: uid(), name: info.name, qty: 0 };
+      loc.items.push(item);
+      target.item = item;
+    }
+    item.qty = Math.max(0, (item.qty || 0) + signed);
+    destName = '📦 ' + loc.name;
+    newQty = item.qty;
+  } else {
+    const med = target.m;
+    if (!med.restocks) med.restocks = [];
+    med.restocks.push({ id: uid(), qty: signed, note: T('Scansione codice','Barcode scan'), date: new Date().toISOString() });
+    med.totalQty = Math.max(0, (med.totalQty || 0) + signed);
+    recalcMedEnd(med);
+    destName = '👤 ' + target.pt.name;
+    newQty = med.totalQty;
+    if (!dosePerDay(med)) warnHtml = `<div style="font-size:13px;color:var(--w);margin-top:6px">⚠ ${T('Questo farmaco non ha orari impostati: i giorni rimasti non possono essere calcolati. Aprilo dalla scheda paziente e imposta gli orari.','This medicine has no schedule set: days left cannot be calculated. Open it from the patient page and set the schedule.')}</div>`;
+  }
+
   save();
   closeScanModal();
   const res = g('scan-result');
   if (res) {
     res.innerHTML = `<div class="section-box" style="border:1.5px solid ${_scanMode === 'add' ? 'var(--p)' : 'var(--w)'}">
-      <div style="font-weight:700;color:${_scanMode === 'add' ? 'var(--p)' : 'var(--w)'}">${_scanMode === 'add' ? '+' : '−'}${qty} ${escHtml(D.barcodes[_scanCurrentCode].name)}</div>
-      <div style="font-size:13px;color:var(--t2)">${escHtml(target.pt.name)} — ${T('ora','now')} ${med.totalQty} ${T('rimaste','left')}</div>
-      ${!dosePerDay(med) ? `<div style="font-size:13px;color:var(--w);margin-top:6px">⚠ ${T('Questo farmaco non ha orari impostati: i giorni rimasti non possono essere calcolati. Aprilo dalla scheda paziente e imposta gli orari.','This medicine has no schedule set: days left cannot be calculated. Open it from the patient page and set the schedule.')}</div>` : ''}
+      <div style="font-weight:700;color:${_scanMode === 'add' ? 'var(--p)' : 'var(--w)'}">${_scanMode === 'add' ? '+' : '−'}${qty} ${escHtml(info.name)}</div>
+      <div style="font-size:13px;color:var(--t2)">${escHtml(destName)} — ${T('ora','now')} ${newQty} ${T('rimaste','left')}</div>
+      ${warnHtml}
     </div>`;
   }
 }
@@ -2653,6 +2686,183 @@ function closeScanModal() {
   _scanPaused = false;
   _scanLabelFlow = false;
   setTimeout(() => g('scan-input')?.focus(), 100);
+}
+
+// ── Depositi / magazzino ────────────────────────────────────
+function renderLocationsSection() {
+  const el = g('locations-sec');
+  if (!el) return;
+  const locs = D.locations || [];
+  if (!locs.length && !canEdit()) { el.innerHTML = ''; return; }
+  el.innerHTML = `
+    <div class="sec-hd" style="display:flex;align-items:center">
+      <span>📦 ${T('Depositi & magazzino','Storage & warehouse')}</span>
+      ${canEdit() ? `<button class="add-link" style="margin-left:auto;text-transform:none;letter-spacing:0" onclick="addLocation()">+ ${T('Nuovo deposito','New storage')}</button>` : ''}
+    </div>
+    ${locs.map(l => `
+      <div class="patient-card" onclick="navigate('location-detail',{locationId:'${l.id}'})" style="cursor:pointer">
+        <div class="avatar" style="font-size:19px;background:var(--wl)">📦</div>
+        <div class="patient-info">
+          <div class="patient-name">${escHtml(l.name)}</div>
+          <div class="patient-sub">${(l.items||[]).length} ${T('prodotti','products')}</div>
+        </div>
+        <span class="chevron">›</span>
+      </div>`).join('')}
+    ${!locs.length ? `<div style="font-size:13px;color:var(--t3);padding:2px 2px 8px">${T('Es. "Deposito 1° piano", "Carrello emergenze", "Armadio 5"...','E.g. "1st floor storage", "Emergency cart", "Cabinet 5"...')}</div>` : ''}`;
+}
+
+function addLocation() {
+  const name = (prompt(T('Nome del deposito (es. Deposito 1° piano, Carrello emergenze, Armadio 5):','Storage name (e.g. 1st floor storage, Emergency cart):')) || '').trim();
+  if (!name) return;
+  if (!D.locations) D.locations = [];
+  const loc = { id: uid(), name, items: [] };
+  D.locations.push(loc);
+  save();
+  navigate('location-detail', { locationId: loc.id });
+}
+
+function renameLocation(id) {
+  const loc = (D.locations || []).find(l => l.id === id);
+  if (!loc) return;
+  const name = (prompt(T('Nuovo nome:','New name:'), loc.name) || '').trim();
+  if (!name) return;
+  loc.name = name;
+  save();
+  renderLocationDetail();
+}
+
+function confirmDeleteLocation(id) {
+  const loc = (D.locations || []).find(l => l.id === id);
+  if (!loc) return;
+  if (!confirm(T(`Eliminare "${loc.name}" e tutti i suoi prodotti?`, `Delete "${loc.name}" and all its products?`))) return;
+  D.locations = D.locations.filter(l => l.id !== id);
+  save();
+  navigate('patients');
+}
+
+function renderLocationDetail() {
+  const loc = (D.locations || []).find(l => l.id === S.locationId);
+  if (!loc) { navigate('patients'); return; }
+  g('bar-location-detail').innerHTML = `
+    <button class="bar-back" onclick="back()">←</button>
+    <span class="bar-title">📦 ${escHtml(loc.name)}</span>
+    ${canEdit() ? `<div class="bar-icons">
+      <button class="ib" onclick="navigate('scan')" title="Scansiona">${svgIcon('ic-scan')}</button>
+      <button class="ib" onclick="renameLocation('${loc.id}')">${svgIcon('ic-edit')}</button>
+      <button class="ib" style="color:var(--r)" onclick="confirmDeleteLocation('${loc.id}')">${svgIcon('ic-trash')}</button>
+    </div>` : ''}`;
+  const items = [...(loc.items || [])].sort((a, b) => a.name.localeCompare(b.name));
+  g('content-location-detail').innerHTML = `
+    ${items.map(it => `
+      <div class="db-item">
+        <div class="db-item-info">
+          <div class="db-item-name">${escHtml(it.name)}</div>
+        </div>
+        ${canEdit() ? `
+        <div class="qty-ctrl">
+          <button onclick="locItemAdj('${loc.id}','${it.id}',-1)">−</button>
+          <span onclick="locItemSet('${loc.id}','${it.id}')" style="cursor:pointer">${it.qty || 0}</span>
+          <button onclick="locItemAdj('${loc.id}','${it.id}',1)">+</button>
+        </div>
+        <button class="schedule-del" onclick="deleteLocItem('${loc.id}','${it.id}')">×</button>` : `<span style="font-weight:700;font-size:15px">${it.qty || 0}</span>`}
+      </div>`).join('')}
+    ${!items.length ? `<div class="empty">${T('Nessun prodotto ancora','No products yet')}</div>` : ''}
+    ${canEdit() ? `<button class="add-med-btn" onclick="showAddLocItem('${loc.id}')">+ ${T('Aggiungi prodotto','Add product')}</button>` : ''}
+    <div style="font-size:12px;color:var(--t3);margin-top:12px">💡 ${T('Puoi caricare e scaricare qui anche con lo scanner o la foto: questo deposito compare nella scelta della destinazione.','You can also load/unload here with the scanner or photo: this storage appears in the destination choice.')}</div>`;
+}
+
+function locItemAdj(locId, itemId, delta) {
+  const loc = (D.locations || []).find(l => l.id === locId);
+  const it = loc && (loc.items || []).find(x => x.id === itemId);
+  if (!it) return;
+  it.qty = Math.max(0, (it.qty || 0) + delta);
+  save();
+  renderLocationDetail();
+}
+
+function locItemSet(locId, itemId) {
+  const loc = (D.locations || []).find(l => l.id === locId);
+  const it = loc && (loc.items || []).find(x => x.id === itemId);
+  if (!it) return;
+  const v = parseFloat(prompt(T('Quantità attuale:','Current quantity:'), it.qty || 0));
+  if (isNaN(v) || v < 0) return;
+  it.qty = v;
+  save();
+  renderLocationDetail();
+}
+
+function deleteLocItem(locId, itemId) {
+  const loc = (D.locations || []).find(l => l.id === locId);
+  const it = loc && (loc.items || []).find(x => x.id === itemId);
+  if (!it) return;
+  if (!confirm(T(`Rimuovere "${it.name}" dal deposito?`, `Remove "${it.name}" from storage?`))) return;
+  loc.items = loc.items.filter(x => x.id !== itemId);
+  save();
+  renderLocationDetail();
+}
+
+function showAddLocItem(locId) {
+  showModal(`<div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:60;display:flex;align-items:flex-end" onclick="closeModal()">
+    <div style="background:var(--sur);width:100%;max-width:600px;margin:0 auto;border-radius:20px 20px 0 0;padding:20px;max-height:85vh;overflow-y:auto" onclick="event.stopPropagation()">
+      <div style="font-size:17px;font-weight:700;margin-bottom:14px">+ ${T('Aggiungi prodotto al deposito','Add product to storage')}</div>
+      <div class="form-group autocomplete">
+        <label class="form-label">${T('Prodotto','Product')}</label>
+        <input class="form-input" id="loc-item-name" placeholder="${T('es. Tachipirina 500 mg, guanti, garze...','e.g. Tachipirina 500 mg, gloves, gauze...')}"
+          oninput="showLocAutocomplete(this.value)" autocomplete="off">
+        <div class="autocomplete-list" id="loc-autocomplete" style="display:none"></div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">${T('Quantità iniziale','Initial quantity')}</label>
+        <input class="form-input" id="loc-item-qty" type="number" min="0" step="1" placeholder="0" style="font-size:20px;font-weight:700;text-align:center">
+      </div>
+      <button class="btn-primary" onclick="saveLocItem('${locId}')">${T('Aggiungi','Add')}</button>
+      <button class="btn-secondary" onclick="closeModal()">${T('Annulla','Cancel')}</button>
+    </div>
+  </div>`);
+  setTimeout(() => g('loc-item-name')?.focus(), 100);
+}
+
+function showLocAutocomplete(val) {
+  const list = g('loc-autocomplete');
+  if (!list) return;
+  if (!val || val.length < 2) { list.style.display = 'none'; return; }
+  const q = val.toLowerCase();
+  const names = [];
+  Object.values(D.barcodes || {}).forEach(b => names.push(b.name));
+  D.medicineDb.forEach(m => names.push(m.name));
+  if (typeof BUILTIN_MEDS !== 'undefined') BUILTIN_MEDS.forEach(b => names.push(b[0]));
+  const seen = new Set();
+  const hits = names.filter(n => {
+    const k = n.toLowerCase();
+    if (seen.has(k) || !k.includes(q)) return false;
+    seen.add(k);
+    return true;
+  }).slice(0, 8);
+  if (!hits.length) { list.style.display = 'none'; return; }
+  list.innerHTML = hits.map(n => `<div class="autocomplete-item" data-n="${escHtml(n)}" onclick="pickLocName(this.dataset.n)">${escHtml(n)}</div>`).join('');
+  list.style.display = 'block';
+}
+
+function pickLocName(name) {
+  const i = g('loc-item-name');
+  if (i) i.value = name;
+  const l = g('loc-autocomplete');
+  if (l) l.style.display = 'none';
+}
+
+function saveLocItem(locId) {
+  const loc = (D.locations || []).find(l => l.id === locId);
+  if (!loc) return;
+  const name = g('loc-item-name')?.value.trim();
+  const qty = parseFloat(g('loc-item-qty')?.value) || 0;
+  if (!name) { alert(T('Inserisci il nome del prodotto','Enter the product name')); return; }
+  if (!loc.items) loc.items = [];
+  const existing = loc.items.find(it => it.name.toLowerCase() === name.toLowerCase());
+  if (existing) existing.qty = (existing.qty || 0) + qty;
+  else loc.items.push({ id: uid(), name, qty });
+  save();
+  closeModal();
+  renderLocationDetail();
 }
 
 // ── Riconoscimento da foto (OCR) ────────────────────────────
@@ -2756,6 +2966,7 @@ function ocrMatchCandidates(text) {
   };
   Object.values(D.barcodes || {}).forEach(b => addCand(b.name));
   D.patients.forEach(p => (p.medicines || []).forEach(m => addCand(m.name)));
+  (D.locations || []).forEach(l => (l.items || []).forEach(it => addCand(it.name)));
   D.medicineDb.forEach(m => addCand(m.name));
   if (typeof BUILTIN_MEDS !== 'undefined') BUILTIN_MEDS.forEach(b => addCand(b[0]));
   cands.sort((a, b) => b.score - a.score);
