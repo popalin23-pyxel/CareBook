@@ -2765,23 +2765,18 @@ function renderHome() {
   const expiring = getExpiringItems();
   const nAlerts = low.length + expiring.length;
 
-  g('bar-home').innerHTML = `
-    <div style="flex:1">
-      <div style="font-size:22px;font-weight:800">CareStock</div>
-      <div style="font-size:13px;color:var(--t2)">${_fbFacilityName ? '🏥 ' + escHtml(_fbFacilityName) + ' • ' : ''}<span onclick="showOpDropdown()" style="cursor:pointer"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${op.color}"></span> ${escHtml(op.name)} ▾</span></div>
-    </div>
-    <div class="bar-icons">
-      ${isSuperAdmin() ? `<button class="ib" onclick="navigate('super-admin')" title="Pannello Admin" style="font-size:18px">⚡</button>` : ''}
-      <button class="ib" onclick="navigate('search')" title="Ricerca">${svgIcon('ic-search')}</button>
-      <button class="ib" onclick="navigate('calendar')" title="Calendario">${svgIcon('ic-cal')}</button>
-      <button class="ib" onclick="navigate('db')" title="Database">${svgIcon('ic-db')}</button>
-    </div>`;
+  // Barra nascosta: la Home usa il saluto grande al posto della barra
+  const bar = g('bar-home');
+  bar.innerHTML = '';
+  bar.style.display = 'none';
 
-  // Notifiche: le 3 più urgenti (scorte + scadenze, ordinate per urgenza)
-  const notif = [
-    ...low.map(x => ({days: x.status.days ?? 0, icon: '💊', name: x.med.name, sub: '👤 ' + x.patient.name, right: x.status.label, color: x.status.cls === 'expired' ? 'var(--r)' : 'var(--w)'})),
-    ...expiring.map(e => ({days: e.st.days, icon: '⏰', name: e.name, sub: e.icon + ' ' + e.where + ' • ' + T('scad.','exp.') + ' ' + fmtExpiry(e.expiry), right: e.st.label, color: 'var(--r)'}))
-  ].sort((a, b) => a.days - b.days).slice(0, 3);
+  const now = new Date();
+  const WDAYS = ['Domenica','Lunedì','Martedì','Mercoledì','Giovedì','Venerdì','Sabato'];
+  const WDAYS_EN = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const h = now.getHours();
+  const saluto = T(h < 12 ? 'Buongiorno' : h < 18 ? 'Buon pomeriggio' : 'Buonasera',
+                   h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening');
+  const dateStr = `${T(WDAYS[now.getDay()], WDAYS_EN[now.getDay()])} ${now.getDate()} ${MONTHS_IT[now.getMonth()].toLowerCase()}`;
 
   // Visite di oggi
   const today = todayISO();
@@ -2791,68 +2786,65 @@ function renderHome() {
   }));
   todayVisits.sort((a, b) => a.v.date.localeCompare(b.v.date));
 
+  const nMeds = (typeof BUILTIN_MEDS !== 'undefined' ? BUILTIN_MEDS.length : 0) + D.medicineDb.length;
   const locs = D.locations || [];
+  const nExpLoc = expiring.filter(e => e.locId).length;
 
   g('content-home').innerHTML = `
-    <div class="stat-row">
-      <div class="stat-tile" onclick="navigate('patients')">
-        <div class="num">${D.patients.length}</div><div class="lbl">${T('Pazienti','Patients')}</div>
+    <div style="display:flex;align-items:flex-start;gap:10px;padding-top:10px">
+      <div style="flex:1">
+        <div class="h-hello">${saluto}, <span class="h-grad" onclick="showOpDropdown()" style="cursor:pointer">${escHtml(op.name)}</span> 👋</div>
+        <div class="h-date">${dateStr}${_fbFacilityName ? ' · 🏥 ' + escHtml(_fbFacilityName) : ''}</div>
       </div>
-      <div class="stat-tile" onclick="navigate('alerts')" ${low.length ? 'style="border-color:var(--w)"' : ''}>
-        <div class="num" style="color:${low.length ? 'var(--w)' : 'var(--t3)'}">${low.length}</div><div class="lbl">${T('Da ricaricare','To restock')}</div>
-      </div>
-      <div class="stat-tile" onclick="navigate('alerts')" ${expiring.length ? 'style="border-color:var(--r)"' : ''}>
-        <div class="num" style="color:${expiring.length ? 'var(--r)' : 'var(--t3)'}">${expiring.length}</div><div class="lbl">${T('In scadenza','Expiring')}</div>
-      </div>
+      ${isSuperAdmin() ? `<button class="mini-ib" onclick="navigate('super-admin')" title="Pannello Admin" style="font-size:17px">⚡</button>` : ''}
+      <button class="mini-ib" onclick="navigate('search')" title="Ricerca">${svgIcon('ic-search', 19)}</button>
     </div>
 
-    <div class="home-card">
-      <div class="home-card-hd">🔔 ${T('Notifiche','Alerts')} ${nAlerts ? `<span class="cnt-badge">${nAlerts}</span>` : ''}
-        <button class="see-all" onclick="navigate('alerts')">${T('Vedi tutte','See all')} ›</button>
+    <button class="h-hero" onclick="navigate('alerts')">
+      <div class="n">${nAlerts ? nAlerts : '✓'}</div>
+      <div>
+        <div class="big">${nAlerts ? T('Cose da controllare','Things to check') : T('Tutto in ordine','All good')}</div>
+        <div class="sub">${nAlerts
+          ? [low.length ? low.length + ' ' + T(low.length === 1 ? 'scorta in esaurimento' : 'scorte in esaurimento', 'running low') : '',
+             expiring.length ? expiring.length + ' ' + T('in scadenza','expiring') : ''].filter(Boolean).join(' · ')
+          : T('Nessun avviso attivo','No active alerts')}</div>
       </div>
-      ${notif.length ? notif.map(n => `
-        <div class="home-row" onclick="navigate('alerts')">
-          <span style="font-size:17px">${n.icon}</span>
-          <div class="home-row-info">
-            <div class="home-row-name">${escHtml(n.name)}</div>
-            <div class="home-row-sub">${escHtml(n.sub)}</div>
-          </div>
-          <span class="home-row-right" style="color:${n.color}">${n.right}</span>
-        </div>`).join('') : `<div class="home-empty">${T('Nessun avviso, tutto in ordine 🎉','No alerts, all good 🎉')}</div>`}
+      <div class="go">›</div>
+    </button>
+
+    <div class="h-grid">
+      <button class="h-tile" onclick="navigate('patients')">
+        <div class="ico hc-teal">👤</div>
+        <div class="name">${T('Pazienti','Patients')}</div>
+        <div class="sub">${D.patients.length} ${T('in struttura','in facility')}</div>
+      </button>
+      <button class="h-tile" onclick="navigate('locations')">
+        <div class="ico hc-vio">📦</div>
+        <div class="name">${T('Depositi','Storage')}</div>
+        <div class="sub">${locs.length} ${T(locs.length === 1 ? 'magazzino' : 'magazzini','storage')}</div>
+        ${nExpLoc ? `<span class="bdg">⏰${nExpLoc}</span>` : ''}
+      </button>
+      <button class="h-tile" onclick="navigate('calendar')">
+        <div class="ico hc-blu">📅</div>
+        <div class="name">${T('Calendario','Calendar')}</div>
+        <div class="sub">${todayVisits.length ? todayVisits.length + ' ' + T(todayVisits.length === 1 ? 'visita oggi' : 'visite oggi','today') : T('Nessuna visita oggi','No visits today')}</div>
+      </button>
+      <button class="h-tile" onclick="navigate('db')">
+        <div class="ico hc-pnk">💊</div>
+        <div class="name">${T('Prontuario','Database')}</div>
+        <div class="sub">${nMeds.toLocaleString('it-IT')} ${T('farmaci','medicines')}</div>
+      </button>
     </div>
 
-    <div class="home-card">
-      <div class="home-card-hd">📦 ${T('Depositi','Storage')}
-        <button class="see-all" onclick="navigate('locations')">${T('Vedi tutti','See all')} ›</button>
-      </div>
-      ${locs.length ? locs.slice(0, 3).map(l => {
-        const nExp = (l.items || []).filter(it => { const ex = expiryStatus(it.expiry); return ex && ex.cls !== 'ok'; }).length;
-        return `
-        <div class="home-row" onclick="navigate('location-detail',{locationId:'${l.id}'})">
-          <span style="font-size:17px">📦</span>
-          <div class="home-row-info">
-            <div class="home-row-name">${escHtml(l.name)}</div>
-            <div class="home-row-sub">${(l.items||[]).length} ${T('prodotti','products')}</div>
-          </div>
-          ${nExp ? `<span class="home-row-right" style="color:var(--r)">⏰ ${nExp}</span>` : '<span class="chevron">›</span>'}
-        </div>`;
-      }).join('') : `<div class="home-empty">${T('Nessun deposito ancora','No storage yet')}${canEdit() ? `<br><button class="add-link" onclick="addLocation()" style="margin-top:6px;cursor:pointer">+ ${T('Crea il primo deposito','Create the first storage')}</button>` : ''}</div>`}
-    </div>
-
-    <div class="home-card">
-      <div class="home-card-hd">📅 ${T('Oggi','Today')} ${todayVisits.length ? `<span class="cnt-badge" style="background:var(--p)">${todayVisits.length}</span>` : ''}
-        <button class="see-all" onclick="navigate('calendar')">${T('Calendario','Calendar')} ›</button>
-      </div>
-      ${todayVisits.length ? todayVisits.map(({pt, v}) => `
-        <div class="home-row" onclick="navigate('patient-detail',{patientId:'${pt.id}'})">
-          <span style="font-size:15px;font-weight:800;color:var(--p);min-width:44px">${new Date(v.date).toTimeString().slice(0,5)}</span>
-          <div class="home-row-info">
-            <div class="home-row-name">${escHtml(v.title)}</div>
-            <div class="home-row-sub">👤 ${escHtml(pt.name)}${v.location ? ' • ' + escHtml(v.location) : ''}</div>
-          </div>
-          <span class="chevron">›</span>
-        </div>`).join('') : `<div class="home-empty">${T('Nessuna visita oggi','No visits today')}</div>`}
-    </div>`;
+    ${todayVisits.slice(0, 2).map(({pt, v}) => `
+      <div class="h-today" onclick="navigate('patient-detail',{patientId:'${pt.id}'})">
+        <div class="time">${new Date(v.date).toTimeString().slice(0,5)}</div>
+        <div style="min-width:0">
+          <div style="font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(v.title)}</div>
+          <div style="font-size:12px;color:var(--t2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">👤 ${escHtml(pt.name)}${v.location ? ' · ' + escHtml(v.location) : ''}</div>
+        </div>
+        <span class="chevron" style="margin-left:auto">›</span>
+      </div>`).join('')}`;
 }
 
 // ── PAGE: Notifiche ─────────────────────────────────────────
