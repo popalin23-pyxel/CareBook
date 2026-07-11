@@ -262,6 +262,43 @@ function getMedStatus(med) {
   return {cls:'ok', label: T(`${diff} giorni rimasti`, `${diff} days left`), days: diff};
 }
 
+// ── Scadenze prodotti ───────────────────────────────────────
+function expiryStatus(expiry) {
+  if (!expiry) return null;
+  let end;
+  if (/^\d{4}-\d{2}$/.test(expiry)) {
+    const p = expiry.split('-');
+    end = new Date(parseInt(p[0], 10), parseInt(p[1], 10), 0); // ultimo giorno del mese
+  } else {
+    end = new Date(expiry + 'T00:00:00');
+  }
+  if (isNaN(end)) return null;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const diff = Math.round((end - today) / 86400000);
+  if (diff < 0) return {cls: 'expired', days: diff, label: T('SCADUTO', 'EXPIRED')};
+  if (diff <= 30) return {cls: 'low', days: diff, label: T(`scade tra ${diff} gg`, `expires in ${diff}d`)};
+  return {cls: 'ok', days: diff, label: ''};
+}
+
+function fmtExpiry(expiry) {
+  if (!expiry) return '';
+  const p = expiry.split('-');
+  return p[1] + '/' + p[0];
+}
+
+function getExpiringItems() {
+  const out = [];
+  D.patients.forEach(pt => (pt.medicines || []).forEach(m => {
+    const st = expiryStatus(m.expiry);
+    if (st && st.cls !== 'ok') out.push({icon: '👤', where: pt.name, name: m.name, expiry: m.expiry, st});
+  }));
+  (D.locations || []).forEach(l => (l.items || []).forEach(it => {
+    const st = expiryStatus(it.expiry);
+    if (st && st.cls !== 'ok') out.push({icon: '📦', where: l.name, name: it.name, expiry: it.expiry, st});
+  }));
+  return out.sort((a, b) => a.st.days - b.st.days);
+}
+
 function getLowMeds() {
   const result = [];
   D.patients.forEach(pt => {
@@ -278,7 +315,9 @@ function getLowMeds() {
 function hasAlert(pt) {
   return (pt.medicines || []).some(m => {
     const st = getMedStatus(m);
-    return st.cls === 'low' || st.cls === 'expired';
+    if (st.cls === 'low' || st.cls === 'expired') return true;
+    const ex = expiryStatus(m.expiry);
+    return !!ex && ex.cls !== 'ok';
   });
 }
 
@@ -934,6 +973,24 @@ function renderPatientsList() {
     html += `</div>`;
   }
 
+  // Expiring products banner
+  const expiring = getExpiringItems();
+  if (!q && expiring.length > 0) {
+    html += `<div class="alert-banner" style="border-color:#e5a0a0;background:#fff5f5">
+      <div class="alert-banner-hd" style="color:var(--r)">⏰ ${T(`In scadenza (${expiring.length})`, `Expiring (${expiring.length})`)}</div>`;
+    expiring.forEach(e => {
+      html += `<div class="alert-item" style="border-top-color:#e5a0a030">
+        <div class="alert-item-dot" style="border-color:var(--r)"></div>
+        <div class="alert-item-info">
+          <div class="alert-item-name">${escHtml(e.name)}</div>
+          <div class="alert-item-sub">${e.icon} ${escHtml(e.where)} • ${T('scad.','exp.')} ${fmtExpiry(e.expiry)}</div>
+        </div>
+        <div class="alert-item-days" style="color:var(--r)">${e.st.label}</div>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+
   // Patients list
   if (patients.length === 0) {
     html += `<div class="empty">${T('Nessun paziente trovato','No patients found')}</div>`;
@@ -1144,6 +1201,7 @@ function showMedDetail(medId) {
       ${med.monthDays&&med.monthDays.length>0 ? `<div style="font-size:14px;margin-bottom:8px"><strong>${T('Giorni:','Days:')}</strong> ${formatMonthDays(med.monthDays)}</div>` : med.days&&med.days.length>0&&med.days.length<7 ? `<div style="font-size:14px;margin-bottom:8px"><strong>${T('Giorni:','Days:')}</strong> ${formatDays(med.days)}</div>` : ''}
       ${med.startDate ? `<div style="font-size:14px;margin-bottom:8px"><strong>${T('Inizio:','Start:')}</strong> ${fmtDate(med.startDate)}</div>` : ''}
       ${med.endDate ? `<div style="font-size:14px;margin-bottom:8px"><strong>${T('Fine prevista:','Expected end:')}</strong> ${fmtDate(med.endDate)}</div>` : ''}
+      ${med.expiry ? (() => { const ex = expiryStatus(med.expiry); return `<div style="font-size:14px;margin-bottom:8px"><strong>${T('Scadenza confezione:','Box expiry:')}</strong> <span style="${ex && ex.cls !== 'ok' ? 'color:var(--r);font-weight:700' : ''}">${fmtExpiry(med.expiry)}${ex && ex.cls !== 'ok' ? ' ⏰ ' + ex.label : ''}</span></div>`; })() : ''}
 
       ${med.totalQty != null ? `
       <div style="background:var(--bg);border-radius:10px;padding:10px 12px;margin-bottom:10px">
@@ -1185,6 +1243,10 @@ function showRestockForm(medId) {
             placeholder="${T('es. 28','e.g. 28')}" style="font-size:22px;font-weight:700;text-align:center">
         </div>
         <div class="form-group">
+          <label class="form-label">${T('Scadenza della confezione (opzionale)','Box expiry (optional)')}</label>
+          <input class="form-input" id="f-restock-expiry" type="month">
+        </div>
+        <div class="form-group">
           <label class="form-label">${T('Note (opzionale)','Notes (optional)')}</label>
           <input class="form-input" id="f-restock-note"
             placeholder="${T('es. portate da Mario, acquistato in farmacia...','e.g. brought by Mario, bought at pharmacy...')}">
@@ -1213,6 +1275,8 @@ function saveRestock(medId) {
   if (!med.restocks) med.restocks = [];
   med.restocks.push({ id: uid(), qty, note, date: new Date().toISOString() });
   med.totalQty = (med.totalQty || 0) + qty;
+  const rexp = document.getElementById('f-restock-expiry')?.value;
+  if (rexp && (!med.expiry || rexp < med.expiry)) med.expiry = rexp;
   recalcMedEnd(med);
 
   save();
@@ -1490,9 +1554,15 @@ function renderAddMed() {
       <input class="form-input" id="f-end" type="date" value="${_medFormState.endDate||v.endDate||''}" oninput="_medFormState.endDate=this.value">
     </div>
 
-    <div class="form-group">
-      <label class="form-label">${T('Giorni di avviso scorte','Stock alert days')}</label>
-      <input class="form-input" id="f-alert" type="number" min="0" placeholder="${alertDefault}" value="${v.alertDays!=null?v.alertDays:alertDefault}">
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">${T('Giorni di avviso scorte','Stock alert days')}</label>
+        <input class="form-input" id="f-alert" type="number" min="0" placeholder="${alertDefault}" value="${v.alertDays!=null?v.alertDays:alertDefault}">
+      </div>
+      <div class="form-group">
+        <label class="form-label">${T('Scadenza confezione','Box expiry')}</label>
+        <input class="form-input" id="f-expiry" type="month" value="${v.expiry||''}">
+      </div>
     </div>
 
     <button class="btn-primary" onclick="saveMed(${existing?`'${existing.id}'`:null})">${T('Salva medicinale','Save medicine')}</button>
@@ -1737,6 +1807,7 @@ function saveMed(existingId) {
     endDate: g('f-end').value || _medFormState.endDate || null,
     totalQty: qty,
     alertDays: parseInt(g('f-alert').value) || D.settings.alertDays,
+    expiry: g('f-expiry')?.value || null,
     createdAt: existingId ? undefined : new Date().toISOString()
   };
 
@@ -1744,7 +1815,11 @@ function saveMed(existingId) {
   if (!pt) return;
   if (existingId) {
     const idx = pt.medicines.findIndex(m => m.id === existingId);
-    if (idx >= 0) { med.createdAt = pt.medicines[idx].createdAt; pt.medicines[idx] = med; }
+    if (idx >= 0) {
+      med.createdAt = pt.medicines[idx].createdAt;
+      med.restocks = pt.medicines[idx].restocks || [];
+      pt.medicines[idx] = med;
+    }
   } else {
     pt.medicines.push(med);
   }
@@ -2585,6 +2660,8 @@ function setScanMode(mode) {
   g('scan-tab-sub')?.classList.toggle('active', mode === 'sub');
   const btn = g('scan-ok-btn');
   if (btn) btn.textContent = mode === 'add' ? T('Carica','Load') : T('Scarica','Unload');
+  const exG = g('scan-expiry-group');
+  if (exG) exG.style.display = mode === 'add' ? '' : 'none';
 }
 
 function showScanActionModal() {
@@ -2627,6 +2704,10 @@ function showScanActionModal() {
           style="font-size:24px;font-weight:800;text-align:center">
         <div style="font-size:12px;color:var(--t3);margin-top:4px">${T('OK = scatola intera. Cambia il numero se la scatola è aperta (es. 16).','OK = full box. Change the number if the box is open (e.g. 16).')}</div>
       </div>
+      <div class="form-group" id="scan-expiry-group">
+        <label class="form-label">${T('Scadenza sulla scatola (opzionale)','Expiry on the box (optional)')}</label>
+        <input class="form-input" id="scan-expiry" type="month">
+      </div>
       <button class="btn-primary" id="scan-ok-btn" onclick="applyScanAction()">${T('Carica','Load')}</button>` : `
       <div class="allergy-box" style="margin-bottom:10px">${T('Nessun paziente ha questo prodotto in terapia e non ci sono depositi. Aggiungi il farmaco al paziente o crea un deposito dalla pagina principale, poi riscansiona.','No patient has this product and there are no storages. Add the medicine to a patient or create a storage from the main page, then rescan.')}</div>`}
       <button class="btn-secondary" onclick="closeScanModal()">${T('Annulla','Cancel')}</button>
@@ -2642,6 +2723,7 @@ function applyScanAction() {
   if (!qty || qty <= 0) { alert(T('Inserisci una quantità valida','Enter a valid quantity')); return; }
   const signed = _scanMode === 'add' ? qty : -qty;
   const info = D.barcodes[_scanCurrentCode];
+  const scanExp = _scanMode === 'add' ? (g('scan-expiry')?.value || null) : null;
   let destName = '';
   let newQty = 0;
   let warnHtml = '';
@@ -2656,6 +2738,7 @@ function applyScanAction() {
       target.item = item;
     }
     item.qty = Math.max(0, (item.qty || 0) + signed);
+    if (scanExp && (!item.expiry || scanExp < item.expiry)) item.expiry = scanExp;
     destName = '📦 ' + loc.name;
     newQty = item.qty;
   } else {
@@ -2663,6 +2746,7 @@ function applyScanAction() {
     if (!med.restocks) med.restocks = [];
     med.restocks.push({ id: uid(), qty: signed, note: T('Scansione codice','Barcode scan'), date: new Date().toISOString() });
     med.totalQty = Math.max(0, (med.totalQty || 0) + signed);
+    if (scanExp && (!med.expiry || scanExp < med.expiry)) med.expiry = scanExp;
     recalcMedEnd(med);
     destName = '👤 ' + target.pt.name;
     newQty = med.totalQty;
@@ -2699,15 +2783,18 @@ function renderLocationsSection() {
       <span>📦 ${T('Depositi & magazzino','Storage & warehouse')}</span>
       ${canEdit() ? `<button class="add-link" style="margin-left:auto;text-transform:none;letter-spacing:0" onclick="addLocation()">+ ${T('Nuovo deposito','New storage')}</button>` : ''}
     </div>
-    ${locs.map(l => `
-      <div class="patient-card" onclick="navigate('location-detail',{locationId:'${l.id}'})" style="cursor:pointer">
+    ${locs.map(l => {
+      const nExp = (l.items || []).filter(it => { const ex = expiryStatus(it.expiry); return ex && ex.cls !== 'ok'; }).length;
+      return `
+      <div class="patient-card ${nExp ? 'has-alert' : ''}" onclick="navigate('location-detail',{locationId:'${l.id}'})" style="cursor:pointer">
         <div class="avatar" style="font-size:19px;background:var(--wl)">📦</div>
         <div class="patient-info">
           <div class="patient-name">${escHtml(l.name)}</div>
-          <div class="patient-sub">${(l.items||[]).length} ${T('prodotti','products')}</div>
+          <div class="patient-sub">${(l.items||[]).length} ${T('prodotti','products')}${nExp ? ` • <span style="color:var(--r);font-weight:600">⏰ ${nExp} ${T('in scadenza','expiring')}</span>` : ''}</div>
         </div>
         <span class="chevron">›</span>
-      </div>`).join('')}
+      </div>`;
+    }).join('')}
     ${!locs.length ? `<div style="font-size:13px;color:var(--t3);padding:2px 2px 8px">${T('Es. "Deposito 1° piano", "Carrello emergenze", "Armadio 5"...','E.g. "1st floor storage", "Emergency cart", "Cabinet 5"...')}</div>` : ''}`;
 }
 
@@ -2753,10 +2840,13 @@ function renderLocationDetail() {
     </div>` : ''}`;
   const items = [...(loc.items || [])].sort((a, b) => a.name.localeCompare(b.name));
   g('content-location-detail').innerHTML = `
-    ${items.map(it => `
+    ${items.map(it => {
+      const ex = expiryStatus(it.expiry);
+      return `
       <div class="db-item">
-        <div class="db-item-info">
+        <div class="db-item-info" ${canEdit() ? `onclick="editLocItemExpiry('${loc.id}','${it.id}')" style="cursor:pointer"` : ''}>
           <div class="db-item-name">${escHtml(it.name)}</div>
+          <div class="db-item-sub">${it.expiry ? `<span style="${ex && ex.cls !== 'ok' ? 'color:var(--r);font-weight:700' : ''}">${T('scad.','exp.')} ${fmtExpiry(it.expiry)}${ex && ex.cls !== 'ok' ? ' ⏰' : ''}</span>` : (canEdit() ? T('tocca per aggiungere scadenza','tap to add expiry') : '')}</div>
         </div>
         ${canEdit() ? `
         <div class="qty-ctrl">
@@ -2765,7 +2855,8 @@ function renderLocationDetail() {
           <button onclick="locItemAdj('${loc.id}','${it.id}',1)">+</button>
         </div>
         <button class="schedule-del" onclick="deleteLocItem('${loc.id}','${it.id}')">×</button>` : `<span style="font-weight:700;font-size:15px">${it.qty || 0}</span>`}
-      </div>`).join('')}
+      </div>`;
+    }).join('')}
     ${!items.length ? `<div class="empty">${T('Nessun prodotto ancora','No products yet')}</div>` : ''}
     ${canEdit() ? `<button class="add-med-btn" onclick="showAddLocItem('${loc.id}')">+ ${T('Aggiungi prodotto','Add product')}</button>` : ''}
     <div style="font-size:12px;color:var(--t3);margin-top:12px">💡 ${T('Puoi caricare e scaricare qui anche con lo scanner o la foto: questo deposito compare nella scelta della destinazione.','You can also load/unload here with the scanner or photo: this storage appears in the destination choice.')}</div>`;
@@ -2815,6 +2906,10 @@ function showAddLocItem(locId) {
         <label class="form-label">${T('Quantità iniziale','Initial quantity')}</label>
         <input class="form-input" id="loc-item-qty" type="number" min="0" step="1" placeholder="0" style="font-size:20px;font-weight:700;text-align:center">
       </div>
+      <div class="form-group">
+        <label class="form-label">${T('Scadenza (opzionale)','Expiry (optional)')}</label>
+        <input class="form-input" id="loc-item-expiry" type="month">
+      </div>
       <button class="btn-primary" onclick="saveLocItem('${locId}')">${T('Aggiungi','Add')}</button>
       <button class="btn-secondary" onclick="closeModal()">${T('Annulla','Cancel')}</button>
     </div>
@@ -2857,9 +2952,42 @@ function saveLocItem(locId) {
   const qty = parseFloat(g('loc-item-qty')?.value) || 0;
   if (!name) { alert(T('Inserisci il nome del prodotto','Enter the product name')); return; }
   if (!loc.items) loc.items = [];
+  const expiry = g('loc-item-expiry')?.value || null;
   const existing = loc.items.find(it => it.name.toLowerCase() === name.toLowerCase());
-  if (existing) existing.qty = (existing.qty || 0) + qty;
-  else loc.items.push({ id: uid(), name, qty });
+  if (existing) {
+    existing.qty = (existing.qty || 0) + qty;
+    if (expiry && (!existing.expiry || expiry < existing.expiry)) existing.expiry = expiry;
+  } else {
+    loc.items.push({ id: uid(), name, qty, expiry });
+  }
+  save();
+  closeModal();
+  renderLocationDetail();
+}
+
+function editLocItemExpiry(locId, itemId) {
+  const loc = (D.locations || []).find(l => l.id === locId);
+  const it = loc && (loc.items || []).find(x => x.id === itemId);
+  if (!it) return;
+  showModal(`<div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:60;display:flex;align-items:flex-end" onclick="closeModal()">
+    <div style="background:var(--sur);width:100%;max-width:600px;margin:0 auto;border-radius:20px 20px 0 0;padding:20px" onclick="event.stopPropagation()">
+      <div style="font-size:17px;font-weight:700;margin-bottom:14px">📅 ${T('Scadenza','Expiry')} — ${escHtml(it.name)}</div>
+      <div class="form-group">
+        <label class="form-label">${T('Mese di scadenza (come sulla scatola)','Expiry month (as on the box)')}</label>
+        <input class="form-input" id="loc-exp-edit" type="month" value="${it.expiry || ''}">
+      </div>
+      <button class="btn-primary" onclick="saveLocItemExpiry('${locId}','${itemId}')">${T('Salva','Save')}</button>
+      ${it.expiry ? `<button class="btn-danger" onclick="g('loc-exp-edit').value='';saveLocItemExpiry('${locId}','${itemId}')">${T('Rimuovi scadenza','Remove expiry')}</button>` : ''}
+      <button class="btn-secondary" onclick="closeModal()">${T('Annulla','Cancel')}</button>
+    </div>
+  </div>`);
+}
+
+function saveLocItemExpiry(locId, itemId) {
+  const loc = (D.locations || []).find(l => l.id === locId);
+  const it = loc && (loc.items || []).find(x => x.id === itemId);
+  if (!it) return;
+  it.expiry = g('loc-exp-edit')?.value || null;
   save();
   closeModal();
   renderLocationDetail();
