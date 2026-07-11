@@ -2659,6 +2659,7 @@ function closeScanModal() {
 let _ocrWorker = null;
 let _ocrBusy = false;
 let _ocrCands = [];
+let _ocrLastText = '';
 
 function ocrPickPhoto() {
   if (_ocrBusy) return;
@@ -2718,8 +2719,8 @@ async function runOcr(file) {
     const worker = await ensureOcrWorker();
     ocrStatus('🔎 ' + T('Leggo il testo sulla scatola...','Reading text on the box...'));
     const { data } = await worker.recognize(img);
-    const cands = ocrMatchCandidates((data && data.text) || '');
-    showOcrResults(cands);
+    _ocrLastText = (data && data.text) || '';
+    showOcrResults(ocrMatchCandidates(_ocrLastText));
   } catch(e) {
     ocrStatus('⚠ ' + T('Riconoscimento non riuscito. Serve la connessione la prima volta; riprova con una foto nitida e dritta del fronte della scatola.','Recognition failed. Connection needed first time; retry with a sharp, straight photo of the box front.'));
     _scanPaused = false;
@@ -2764,11 +2765,6 @@ function ocrMatchCandidates(text) {
 function showOcrResults(cands) {
   const res = g('scan-result');
   if (res) res.innerHTML = '';
-  if (!cands.length) {
-    ocrStatus('⚠ ' + T('Nessun prodotto riconosciuto. Avvicinati e inquadra il nome grande sul fronte della scatola.','No product recognized. Get closer and frame the big name on the box front.'));
-    _scanPaused = false;
-    return;
-  }
   _ocrCands = cands;
   const rows = cands.map((c, i) => `
     <div class="autocomplete-item" style="display:flex;align-items:center;gap:10px;border:1.5px solid var(--br);border-radius:10px;margin-bottom:8px" onclick="ocrPick(${i})">
@@ -2777,13 +2773,26 @@ function showOcrResults(cands) {
     </div>`).join('');
   showModal(`<div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:60;display:flex;align-items:flex-end" onclick="closeScanModal()">
     <div style="background:var(--sur);width:100%;max-width:600px;margin:0 auto;border-radius:20px 20px 0 0;padding:20px;max-height:85vh;overflow-y:auto" onclick="event.stopPropagation()">
-      <div style="font-size:17px;font-weight:700;margin-bottom:4px">${T('È uno di questi?','Is it one of these?')}</div>
-      <div style="font-size:13px;color:var(--t2);margin-bottom:14px">${T('Tocca il prodotto giusto. Controlla bene il dosaggio!','Tap the right product. Double-check the dosage!')}</div>
+      <div style="font-size:17px;font-weight:700;margin-bottom:4px">${cands.length ? T('È uno di questi?','Is it one of these?') : T('Non l\'ho trovato nel prontuario','Not found in the database')}</div>
+      <div style="font-size:13px;color:var(--t2);margin-bottom:14px">${cands.length ? T('Tocca il prodotto giusto. Controlla bene il dosaggio!','Tap the right product. Double-check the dosage!') : T('Nessun problema: aggiungilo tu qui sotto. L\'app lo impara e alla prossima foto lo riconosce da sola.','No problem: add it below. The app learns it and will recognize it in the next photo.')}</div>
       ${rows}
+      <button class="btn-primary" style="margin-top:0" onclick="ocrAddNew()">➕ ${T('Prodotto nuovo / non in lista','New product / not listed')}</button>
       <button class="btn-secondary" onclick="closeScanModal();ocrPickPhoto()">📷 ${T('Rifai la foto','Retake photo')}</button>
       <button class="btn-secondary" onclick="closeScanModal()">${T('Annulla','Cancel')}</button>
     </div>
   </div>`);
+}
+
+function ocrAddNew() {
+  closeModal();
+  createInternalLabel();
+  _scanLabelFlow = false; // dopo il salvataggio: vai al carico/scarico
+  // Precompila con la riga più "da nome prodotto" letta dalla foto
+  const line = (_ocrLastText || '').split('\n')
+    .map(s => s.replace(/[^\wÀ-ÿ0-9 ,./]/g, ' ').replace(/\s+/g, ' ').trim())
+    .filter(s => s.length >= 4 && s.length <= 40 && /[a-zA-Z]{3}/.test(s))[0] || '';
+  const inp = g('scan-assoc-name');
+  if (inp && !inp.value) inp.value = line;
 }
 
 function ocrPick(i) {
