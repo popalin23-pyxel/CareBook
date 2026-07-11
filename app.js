@@ -2631,6 +2631,7 @@ function applyScanAction() {
     res.innerHTML = `<div class="section-box" style="border:1.5px solid ${_scanMode === 'add' ? 'var(--p)' : 'var(--w)'}">
       <div style="font-weight:700;color:${_scanMode === 'add' ? 'var(--p)' : 'var(--w)'}">${_scanMode === 'add' ? '+' : '−'}${qty} ${escHtml(D.barcodes[_scanCurrentCode].name)}</div>
       <div style="font-size:13px;color:var(--t2)">${escHtml(target.pt.name)} — ${T('ora','now')} ${med.totalQty} ${T('rimaste','left')}</div>
+      ${!dosePerDay(med) ? `<div style="font-size:13px;color:var(--w);margin-top:6px">⚠ ${T('Questo farmaco non ha orari impostati: i giorni rimasti non possono essere calcolati. Aprilo dalla scheda paziente e imposta gli orari.','This medicine has no schedule set: days left cannot be calculated. Open it from the patient page and set the schedule.')}</div>` : ''}
     </div>`;
   }
 }
