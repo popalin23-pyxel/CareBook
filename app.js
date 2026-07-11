@@ -2424,6 +2424,7 @@ let _scanPaused = false;
 let _scanCurrentCode = '';
 let _scanMode = 'add';
 let _scanMatches = [];
+let _scanLabelFlow = false;
 
 function renderScan() {
   const camSupported = 'BarcodeDetector' in window;
@@ -2447,7 +2448,12 @@ function renderScan() {
         onkeydown="if(event.key==='Enter'){handleScannedCode(this.value);this.value='';}">
       <div style="font-size:12px;color:var(--t3);margin-top:4px">${T('Gli scanner USB/Bluetooth scrivono qui da soli e premono Invio.','USB/Bluetooth scanners type here and press Enter automatically.')}</div>
     </div>
-    <div id="scan-result"></div>`;
+    <div id="scan-result"></div>
+    <div class="section-box" style="margin-top:14px">
+      <div style="font-size:14px;font-weight:700;margin-bottom:4px">📦 ${T('Scatole senza codice a barre?','Boxes without a barcode?')}</div>
+      <div style="font-size:13px;color:var(--t2);margin-bottom:10px">${T('Crea un\'etichetta interna, stampala e attaccala sul cassetto o ripiano: poi si scansiona come un codice normale.','Create an internal label, print it and stick it on the drawer or shelf: then scan it like a normal code.')}</div>
+      <button class="btn-secondary" style="margin-top:0" onclick="showLabelsModal()">${T('Gestisci / stampa etichette','Manage / print labels')}</button>
+    </div>`;
   if (camSupported) startScanner();
   setTimeout(() => g('scan-input')?.focus(), 200);
 }
@@ -2559,7 +2565,12 @@ function saveScanAssociation() {
   if (!D.barcodes) D.barcodes = {};
   D.barcodes[_scanCurrentCode] = { name, boxQty };
   save();
-  showScanActionModal();
+  if (_scanLabelFlow) {
+    _scanLabelFlow = false;
+    showLabelsModal();
+  } else {
+    showScanActionModal();
+  }
 }
 
 function setScanMode(mode) {
@@ -2639,7 +2650,117 @@ function applyScanAction() {
 function closeScanModal() {
   closeModal();
   _scanPaused = false;
+  _scanLabelFlow = false;
   setTimeout(() => g('scan-input')?.focus(), 100);
+}
+
+// ── Etichette interne (per scatole senza codice a barre) ────
+const C128 = ['212222','222122','222221','121223','121322','131222','122213','122312','132212','221213','221312','231212','112232','122132','122231','113222','123122','123221','223211','221132','221231','213212','223112','312131','311222','321122','321221','312212','322112','322211','212123','212321','232121','111323','131123','131321','112313','132113','132311','211313','231113','231311','112133','112331','132131','113123','113321','133121','313121','211331','231131','213113','213311','213131','311123','311321','331121','312113','312311','332111','314111','221411','431111','111224','111422','121124','121421','141122','141221','112214','112412','122114','122411','142112','142211','241211','221114','413111','241112','134111','111242','121142','121241','114212','124112','124211','411212','421112','421211','212141','214121','412121','111143','111341','131141','114113','114311','411113','411311','113141','114131','311141','411131','211412','211214','211232'];
+
+function code128Svg(text, height) {
+  height = height || 60;
+  let sum = 104;
+  const vals = [];
+  for (let i = 0; i < text.length; i++) {
+    const v = text.charCodeAt(i) - 32;
+    if (v < 0 || v > 94) return '';
+    vals.push(v);
+    sum += v * (i + 1);
+  }
+  const seq = [104].concat(vals, [sum % 103]);
+  const pattern = seq.map(v => C128[v]).join('') + '2331112';
+  const scale = 2;
+  let x = 10 * scale; // zona bianca iniziale
+  let rects = '';
+  for (let i = 0; i < pattern.length; i++) {
+    const w = parseInt(pattern[i]) * scale;
+    if (i % 2 === 0) rects += `<rect x="${x}" y="0" width="${w}" height="${height}"/>`;
+    x += w;
+  }
+  x += 10 * scale; // zona bianca finale
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${x}" height="${height}" viewBox="0 0 ${x} ${height}" style="background:#fff"><rect x="0" y="0" width="${x}" height="${height}" fill="#fff"/><g fill="#000">${rects}</g></svg>`;
+}
+
+function internalLabels() {
+  return Object.entries(D.barcodes || {})
+    .filter(([code]) => /^CS\d+$/.test(code))
+    .sort((a, b) => a[0].localeCompare(b[0]));
+}
+
+function createInternalLabel() {
+  if (!D.barcodes) D.barcodes = {};
+  let n = 1;
+  Object.keys(D.barcodes).forEach(k => {
+    const m = k.match(/^CS(\d+)$/);
+    if (m) n = Math.max(n, parseInt(m[1], 10) + 1);
+  });
+  _scanCurrentCode = 'CS' + String(n).padStart(4, '0');
+  _scanPaused = true;
+  _scanLabelFlow = true;
+  showScanAssociateModal();
+}
+
+function showLabelsModal() {
+  const labels = internalLabels();
+  const rows = labels.map(([code, info]) => `
+    <div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--br)">
+      <div style="flex:1">
+        <div style="font-size:14px;font-weight:600">${escHtml(info.name)}</div>
+        <div style="font-size:12px;color:var(--t2)">${code} · ${T('scatola da','box of')} ${info.boxQty}</div>
+      </div>
+      <button class="ib" style="color:var(--r)" onclick="deleteInternalLabel('${code}')">${svgIcon('ic-trash', 18)}</button>
+    </div>`).join('');
+  showModal(`<div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:60;display:flex;align-items:flex-end" onclick="closeScanModal()">
+    <div style="background:var(--sur);width:100%;max-width:600px;margin:0 auto;border-radius:20px 20px 0 0;padding:20px;max-height:85vh;overflow-y:auto" onclick="event.stopPropagation()">
+      <div style="font-size:17px;font-weight:700;margin-bottom:4px">${T('Etichette interne','Internal labels')}</div>
+      <div style="font-size:13px;color:var(--t2);margin-bottom:12px">${T('Per le scatole senza codice a barre: stampa le etichette e attaccale sul cassetto o su un foglio, poi scansionale come un codice normale.','For boxes without a barcode: print the labels and stick them on the drawer or a sheet, then scan them like a normal code.')}</div>
+      ${labels.length ? rows : `<div class="empty" style="padding:20px">${T('Nessuna etichetta ancora creata','No labels created yet')}</div>`}
+      <button class="btn-primary" onclick="closeModal();createInternalLabel()">+ ${T('Crea etichetta prodotto','Create product label')}</button>
+      ${labels.length ? `<button class="btn-secondary" onclick="printLabels()">🖨 ${T('Stampa etichette','Print labels')} (${labels.length})</button>` : ''}
+      <button class="btn-secondary" onclick="closeScanModal()">${T('Chiudi','Close')}</button>
+    </div>
+  </div>`);
+}
+
+function deleteInternalLabel(code) {
+  const info = (D.barcodes || {})[code];
+  if (!info) return;
+  if (!confirm(T(`Eliminare l'etichetta ${code} (${info.name})?`, `Delete label ${code} (${info.name})?`))) return;
+  delete D.barcodes[code];
+  save();
+  showLabelsModal();
+}
+
+function printLabels() {
+  const labels = internalLabels();
+  if (!labels.length) return;
+  const cards = labels.map(([code, info]) => `
+    <div class="label-card">
+      <div class="label-name">${escHtml(info.name)}</div>
+      <div class="label-sub">${T('Scatola da','Box of')} ${info.boxQty}</div>
+      ${code128Svg(code, 70)}
+      <div class="label-code">${code}</div>
+    </div>`).join('');
+  const html = `<!DOCTYPE html><html lang="it"><head><meta charset="UTF-8"><title>${T('Etichette CareStock','CareStock labels')}</title>
+  <style>
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:16px;color:#1a1a1a}
+    h1{font-size:18px}
+    .grid{display:flex;flex-wrap:wrap;gap:0}
+    .label-card{width:47%;box-sizing:border-box;border:1.5px dashed #999;padding:12px;text-align:center;margin:0 1% 10px;page-break-inside:avoid;background:#fff}
+    .label-name{font-size:15px;font-weight:700;margin-bottom:2px}
+    .label-sub{font-size:12px;color:#666;margin-bottom:8px}
+    .label-code{font-size:13px;font-weight:600;letter-spacing:2px;margin-top:4px;font-family:monospace}
+    svg{max-width:100%}
+    @media print{h1,.hint{display:none}body{margin:6px}}
+  </style></head><body>
+  <h1>${T('Etichette interne CareStock','CareStock internal labels')}</h1>
+  <div class="hint" style="font-size:13px;color:#666;margin-bottom:12px">${T('Ritaglia lungo le linee tratteggiate. Attacca le etichette sui cassetti/ripiani o su un foglio plastificato.','Cut along the dashed lines. Stick the labels on drawers/shelves or a laminated sheet.')}</div>
+  <div class="grid">${cards}</div>
+  <script>window.print();<\/script>
+  </body></html>`;
+  const win = window.open('about:blank', '_blank');
+  win.document.write(html);
+  win.document.close();
 }
 
 // ── Export / Import ─────────────────────────────────────────
