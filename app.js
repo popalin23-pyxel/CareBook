@@ -1070,9 +1070,7 @@ function renderPatientDetail() {
       </div>
     </div>`;
 
-  if (hasAlert(pt)) {
-    html += `<button class="btn-primary" style="margin:0 0 12px" onclick="showNotifyModal('${pt.id}')">📣 ${T('Avvisa familiare / medico','Notify family / doctor')}</button>`;
-  }
+  html += `<button class="btn-primary" style="margin:0 0 12px" onclick="showNotifyModal('${pt.id}')">📣 ${T('Avvisa familiare / medico','Notify family / doctor')}</button>`;
 
   if (pt.allergies) {
     html += `<div class="allergy-box">${svgIcon('ic-clock',14)} <strong>${T('Note / allergie:','Notes / allergies:')}</strong> ${escHtml(pt.allergies)}</div>`;
@@ -3358,73 +3356,198 @@ function printOrder() {
 // ── Avviso familiare / medico ───────────────────────────────
 let _notifyPtId = null;
 let _notifyTo = 'family';
+let _notifySel = [];
 
-function buildNotifyText(pt) {
-  const lowMeds = (pt.medicines || []).filter(m => {
-    const st = getMedStatus(m);
-    return st.cls === 'low' || st.cls === 'expired';
-  });
-  const expMeds = (pt.medicines || []).filter(m => {
-    const ex = expiryStatus(m.expiry);
-    return ex && ex.cls !== 'ok';
-  });
-  const rec = _notifyTo === 'doctor' ? (pt.doctor || {}) : (pt.family || {});
-  let txt = (rec.name ? T('Gentile ', 'Dear ') + rec.name + ',\n' : '') +
-    T(`per ${pt.name} segnaliamo:`, `regarding ${pt.name}:`) + '\n\n';
-  if (lowMeds.length) {
-    txt += T('FARMACI IN ESAURIMENTO (da procurare):','MEDICINES RUNNING LOW:') + '\n';
-    lowMeds.forEach(m => {
-      const st = getMedStatus(m);
-      txt += `• ${m.name} — ${st.label}${m.totalQty != null ? ' (' + m.totalQty + ' ' + T('rimaste','left') + ')' : ''}\n`;
-    });
-    txt += '\n';
-  }
-  if (expMeds.length) {
-    txt += T('CONFEZIONI IN SCADENZA (da sostituire):','EXPIRING BOXES:') + '\n';
-    expMeds.forEach(m => {
-      const ex = expiryStatus(m.expiry);
-      txt += `• ${m.name} — ${T('scad.','exp.')} ${fmtExpiry(m.expiry)} (${ex.label})\n`;
-    });
-    txt += '\n';
-  }
-  txt += T('Può gentilmente provvedere? Grazie!','Could you kindly take care of it? Thank you!') +
-    (_fbFacilityName ? '\n' + _fbFacilityName : '');
-  return txt;
+function notifyMedStatus(m) {
+  const st = getMedStatus(m);
+  const ex = expiryStatus(m.expiry);
+  if (st.cls === 'expired') return { alert: true, label: T('terminato', 'finished') };
+  if (st.cls === 'low') return { alert: true, label: st.label };
+  if (ex && ex.cls !== 'ok') return { alert: true, label: T('confezione in scadenza', 'box expiring') + ' (' + fmtExpiry(m.expiry) + ')' };
+  return { alert: false, label: T('da procurare', 'needed') };
 }
 
-function showNotifyModal(ptId) {
+function showNotifyModal(ptId, keepSel) {
   const pt = D.patients.find(p => p.id === ptId);
   if (!pt) return;
   _notifyPtId = ptId;
+  const meds = pt.medicines || [];
+  if (!keepSel) {
+    _notifySel = meds.filter(m => notifyMedStatus(m).alert).map(m => m.id);
+    if (!_notifySel.length && meds.length) _notifySel = [];
+  }
   const fam = pt.family || {};
   const doc = pt.doctor || {};
   if (_notifyTo === 'family' && !fam.name && doc.name) _notifyTo = 'doctor';
   if (_notifyTo === 'doctor' && !doc.name && fam.name) _notifyTo = 'family';
   const rec = _notifyTo === 'doctor' ? doc : fam;
-  const preview = buildNotifyText(pt);
+  const hasContacts = !!(fam.name || doc.name);
+
   showModal(`<div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:60;display:flex;align-items:flex-end" onclick="closeModal()">
     <div style="background:var(--sur);width:100%;max-width:600px;margin:0 auto;border-radius:20px 20px 0 0;padding:20px;max-height:88vh;overflow-y:auto" onclick="event.stopPropagation()">
       <div style="font-size:17px;font-weight:700;margin-bottom:12px">📣 ${T('Avvisa per','Notify for')} ${escHtml(pt.name)}</div>
-      ${(fam.name || doc.name) ? `
+      ${!hasContacts ? `
+        <div class="allergy-box" style="margin-bottom:10px">${T('Nessun contatto salvato per questo paziente. Aggiungi familiare o medico (con telefono/email) modificando la scheda paziente.','No contacts saved. Add family or doctor by editing the patient.')}</div>
+        ${canEdit() ? `<button class="btn-primary" onclick="closeModal();S.patientId='${ptId}';navigate('add-patient',{editMode:true})">✎ ${T('Aggiungi contatti','Add contacts')}</button>` : ''}` : `
       <div style="font-size:13px;color:var(--t2);margin-bottom:6px">${T('A chi lo mandi?','Send to whom?')}</div>
       <div class="pills" style="margin-bottom:12px">
-        ${fam.name ? `<button class="pill ${_notifyTo === 'family' ? 'active' : ''}" onclick="_notifyTo='family';showNotifyModal('${ptId}')">👪 ${escHtml(fam.name)}</button>` : ''}
-        ${doc.name ? `<button class="pill ${_notifyTo === 'doctor' ? 'active' : ''}" onclick="_notifyTo='doctor';showNotifyModal('${ptId}')">🩺 ${escHtml(doc.name)}</button>` : ''}
+        ${fam.name ? `<button class="pill ${_notifyTo === 'family' ? 'active' : ''}" onclick="_notifyTo='family';showNotifyModal('${ptId}', true)">👪 ${escHtml(fam.name)}</button>` : ''}
+        ${doc.name ? `<button class="pill ${_notifyTo === 'doctor' ? 'active' : ''}" onclick="_notifyTo='doctor';showNotifyModal('${ptId}', true)">🩺 ${escHtml(doc.name)}</button>` : ''}
       </div>
-      <div style="background:var(--bg);border-radius:14px;padding:12px;font-size:13px;color:var(--t1);white-space:pre-wrap;margin-bottom:14px;max-height:220px;overflow-y:auto">${escHtml(preview)}</div>
-      <button class="btn-primary" ${rec.phone ? '' : 'disabled style="opacity:.5"'} onclick="sendNotifyWhatsApp()">💬 ${T('Invia su WhatsApp','Send via WhatsApp')}${rec.phone ? '' : ' (' + T('nessun numero','no number') + ')'}</button>
-      <button class="btn-secondary" ${rec.email ? '' : 'disabled style="opacity:.5"'} onclick="sendNotifyEmail()">✉️ ${T('Invia per email','Send by email')}${rec.email ? '' : ' (' + T('nessuna email','no email') + ')'}</button>
-      <button class="btn-secondary" onclick="copyNotify(this)">📋 ${T('Copia testo','Copy text')}</button>` : `
-      <div class="allergy-box" style="margin-bottom:10px">${T('Nessun contatto salvato per questo paziente. Aggiungi familiare o medico (con telefono/email) modificando la scheda paziente.','No contacts saved for this patient. Add family or doctor contacts by editing the patient.')}</div>
-      ${canEdit() ? `<button class="btn-primary" onclick="closeModal();navigate('add-patient',{patientId:'${ptId}',editMode:true})">✎ ${T('Aggiungi contatti','Add contacts')}</button>` : ''}`}
+      <div style="font-size:13px;color:var(--t2);margin-bottom:6px">${T('Quali farmaci segnali? (spunta anche altri se servono)','Which medicines? (tick others too if needed)')}</div>
+      <div style="border:1.5px solid var(--br);border-radius:14px;padding:4px 12px;margin-bottom:12px;max-height:230px;overflow-y:auto">
+        ${meds.length ? meds.map(m => {
+          const ns = notifyMedStatus(m);
+          return `<label style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--br);cursor:pointer">
+            <input type="checkbox" ${_notifySel.includes(m.id) ? 'checked' : ''} onchange="toggleNotifyMed('${m.id}')" style="width:20px;height:20px;accent-color:var(--p)">
+            <span style="flex:1;font-size:14px;font-weight:600">${escHtml(m.name)}</span>
+            <span style="font-size:12px;font-weight:600;color:${ns.alert ? 'var(--w)' : 'var(--t3)'}">${ns.alert ? '⚠ ' + ns.label : ''}</span>
+          </label>`;
+        }).join('') : `<div class="empty" style="padding:14px">${T('Nessun farmaco in scheda','No medicines')}</div>`}
+      </div>
+      <button class="btn-primary" onclick="sendNotifyPdf()">📄 ${T('Invia PDF (email, WhatsApp...)','Send PDF (email, WhatsApp...)')}</button>
+      <button class="btn-secondary" ${rec.phone ? '' : 'disabled style="opacity:.5"'} onclick="sendNotifyWhatsApp()">💬 ${T('Messaggio WhatsApp','WhatsApp message')}${rec.phone ? '' : ' (' + T('nessun numero','no number') + ')'}</button>
+      <button class="btn-secondary" ${rec.email ? '' : 'disabled style="opacity:.5"'} onclick="sendNotifyEmail()">✉️ ${T('Email (testo semplice)','Email (plain text)')}${rec.email ? '' : ' (' + T('nessuna email','no email') + ')'}</button>
+      <button class="btn-secondary" onclick="copyNotify(this)">📋 ${T('Copia testo','Copy text')}</button>`}
       <button class="btn-secondary" onclick="closeModal()">${T('Chiudi','Close')}</button>
     </div>
   </div>`);
 }
 
+function toggleNotifyMed(medId) {
+  const i = _notifySel.indexOf(medId);
+  if (i >= 0) _notifySel.splice(i, 1);
+  else _notifySel.push(medId);
+}
+
+function notifySelectedMeds(pt) {
+  return (pt.medicines || []).filter(m => _notifySel.includes(m.id));
+}
+
+function buildNotifyText(pt) {
+  const rec = _notifyTo === 'doctor' ? (pt.doctor || {}) : (pt.family || {});
+  const meds = notifySelectedMeds(pt);
+  let txt = (rec.name ? T('Gentile ', 'Dear ') + rec.name + ',\n' : '') +
+    T(`per ${pt.name} segnaliamo i seguenti farmaci da procurare:`, `for ${pt.name}, the following medicines are needed:`) + '\n\n';
+  meds.forEach(m => {
+    const ns = notifyMedStatus(m);
+    txt += `• ${m.name} — ${ns.label}\n`;
+  });
+  txt += '\n' + T('Può gentilmente provvedere? Grazie!','Could you kindly take care of it? Thank you!') +
+    (_fbFacilityName ? '\n' + _fbFacilityName : '');
+  return txt;
+}
+
+// PDF minimale generato direttamente dall'app (nessuna libreria)
+function _pdfEsc(s) {
+  const MAP = { '—': '-', '–': '-', '’': "'", '‘': "'", '“': '"', '”': '"', '…': '...', '•': '\\267', '€': '\\200' };
+  let out = '';
+  for (const ch of String(s)) {
+    const c = ch.codePointAt(0);
+    if (ch === '(' || ch === ')' || ch === '\\') out += '\\' + ch;
+    else if (c >= 32 && c <= 126) out += ch;
+    else if (c >= 160 && c <= 255) out += '\\' + c.toString(8).padStart(3, '0');
+    else if (MAP[ch]) out += MAP[ch];
+    else out += ' ';
+  }
+  return out;
+}
+
+function makePdfBlob(lines) {
+  let y = 790;
+  const parts = ['BT'];
+  lines.forEach(l => {
+    const size = l.size || 11.5;
+    y -= (l.gap != null ? l.gap : size + 7);
+    if (l.text) parts.push(`/F${l.bold ? '2' : '1'} ${size} Tf 1 0 0 1 56 ${Math.round(y)} Tm (${_pdfEsc(l.text)}) Tj`);
+  });
+  parts.push('ET');
+  const content = parts.join('\n');
+  const objs = [];
+  objs[1] = '<< /Type /Catalog /Pages 2 0 R >>';
+  objs[2] = '<< /Type /Pages /Kids [3 0 R] /Count 1 >>';
+  objs[3] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >>';
+  objs[4] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>';
+  objs[5] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>';
+  objs[6] = `<< /Length ${content.length} >>\nstream\n${content}\nendstream`;
+  let pdf = '%PDF-1.4\n';
+  const offs = [];
+  for (let i = 1; i <= 6; i++) {
+    offs[i] = pdf.length;
+    pdf += `${i} 0 obj\n${objs[i]}\nendobj\n`;
+  }
+  const xref = pdf.length;
+  pdf += 'xref\n0 7\n0000000000 65535 f \n' +
+    offs.slice(1).map(o => String(o).padStart(10, '0') + ' 00000 n \n').join('') +
+    `trailer\n<< /Size 7 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
+  const bytes = new Uint8Array(pdf.length);
+  for (let i = 0; i < pdf.length; i++) bytes[i] = pdf.charCodeAt(i) & 0xff;
+  return new Blob([bytes], { type: 'application/pdf' });
+}
+
+function _wrapText(s, max) {
+  const words = String(s).split(' ');
+  const out = [];
+  let cur = '';
+  words.forEach(w => {
+    if ((cur + ' ' + w).trim().length > max) { if (cur) out.push(cur); cur = w; }
+    else cur = (cur ? cur + ' ' : '') + w;
+  });
+  if (cur) out.push(cur);
+  return out;
+}
+
+function makeNotifyPdfBlob(pt) {
+  const rec = _notifyTo === 'doctor' ? (pt.doctor || {}) : (pt.family || {});
+  const meds = notifySelectedMeds(pt);
+  const lines = [];
+  lines.push({ text: T('Farmaci da procurare','Medicines needed'), size: 19, bold: true, gap: 26 });
+  lines.push({ text: T('Paziente: ','Patient: ') + pt.name + '  ·  ' + fmtDate(new Date().toISOString()), size: 11, gap: 20 });
+  if (_fbFacilityName) lines.push({ text: _fbFacilityName, size: 11, gap: 16 });
+  lines.push({ text: '', gap: 12 });
+  if (rec.name) lines.push({ text: T('Gentile ','Dear ') + rec.name + ',', gap: 18 });
+  _wrapText(T(`la informiamo che i seguenti farmaci di ${pt.name} sono da procurare:`, `the following medicines for ${pt.name} are needed:`), 88).forEach(t => lines.push({ text: t, gap: 16 }));
+  lines.push({ text: '', gap: 8 });
+  meds.forEach(m => {
+    const ns = notifyMedStatus(m);
+    _wrapText('• ' + m.name + ' — ' + ns.label, 84).forEach((t, i) => lines.push({ text: i ? '   ' + t : t, size: 12.5, bold: true, gap: 19 }));
+  });
+  lines.push({ text: '', gap: 14 });
+  _wrapText(T('La ringraziamo per la cortese collaborazione.','Thank you for your kind cooperation.'), 88).forEach(t => lines.push({ text: t, gap: 16 }));
+  if (_fbFacilityName) lines.push({ text: _fbFacilityName, bold: true, gap: 22 });
+  return makePdfBlob(lines);
+}
+
+async function sendNotifyPdf() {
+  const pt = D.patients.find(p => p.id === _notifyPtId);
+  if (!pt) return;
+  if (!notifySelectedMeds(pt).length) { alert(T('Spunta almeno un farmaco','Tick at least one medicine')); return; }
+  const blob = makeNotifyPdfBlob(pt);
+  const fname = T('farmaci','medicines') + '-' + pt.name.replace(/[^a-zA-Z0-9]+/g, '-').toLowerCase() + '.pdf';
+  const file = new File([blob], fname, { type: 'application/pdf' });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: T('Farmaci da procurare','Medicines needed') });
+      return;
+    } catch(e) {
+      if (e && e.name === 'AbortError') return;
+    }
+  }
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fname;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  alert(T('PDF scaricato: allegalo alla mail o al messaggio','PDF downloaded: attach it to your email or message'));
+}
+
 function sendNotifyWhatsApp() {
   const pt = D.patients.find(p => p.id === _notifyPtId);
   if (!pt) return;
+  if (!notifySelectedMeds(pt).length) { alert(T('Spunta almeno un farmaco','Tick at least one medicine')); return; }
   const rec = _notifyTo === 'doctor' ? (pt.doctor || {}) : (pt.family || {});
   const phone = (rec.phone || '').replace(/[^0-9+]/g, '').replace('+', '');
   window.open('https://wa.me/' + phone + '?text=' + encodeURIComponent(buildNotifyText(pt)), '_blank');
@@ -3433,6 +3556,7 @@ function sendNotifyWhatsApp() {
 function sendNotifyEmail() {
   const pt = D.patients.find(p => p.id === _notifyPtId);
   if (!pt) return;
+  if (!notifySelectedMeds(pt).length) { alert(T('Spunta almeno un farmaco','Tick at least one medicine')); return; }
   const rec = _notifyTo === 'doctor' ? (pt.doctor || {}) : (pt.family || {});
   location.href = 'mailto:' + (rec.email || '') +
     '?subject=' + encodeURIComponent(T('Farmaci da procurare — ','Medicines needed — ') + pt.name) +
