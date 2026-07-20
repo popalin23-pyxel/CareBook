@@ -1070,6 +1070,10 @@ function renderPatientDetail() {
       </div>
     </div>`;
 
+  if (hasAlert(pt)) {
+    html += `<button class="btn-primary" style="margin:0 0 12px" onclick="showNotifyModal('${pt.id}')">📣 ${T('Avvisa familiare / medico','Notify family / doctor')}</button>`;
+  }
+
   if (pt.allergies) {
     html += `<div class="allergy-box">${svgIcon('ic-clock',14)} <strong>${T('Note / allergie:','Notes / allergies:')}</strong> ${escHtml(pt.allergies)}</div>`;
   }
@@ -2925,6 +2929,7 @@ function renderAlerts() {
           <div class="patient-sub">👤 ${escHtml(pt.name)} • ${T('Stanza','Room')} ${escHtml(pt.room || '?')}${med.totalQty != null ? ' • ' + med.totalQty + ' ' + T('rimaste','left') : ''}</div>
         </div>
         <span style="font-size:13px;font-weight:700;color:${status.cls === 'expired' ? 'var(--r)' : 'var(--w)'};white-space:nowrap">${status.label}</span>
+        <button class="ib" style="font-size:17px;padding:6px" title="${T('Avvisa','Notify')}" onclick="event.stopPropagation();showNotifyModal('${pt.id}')">📣</button>
       </div>`).join('');
   } else {
     html += `<div class="home-empty" style="padding:14px 0">${T('Nessuna scorta in esaurimento 👍','No stock running low 👍')}</div>`;
@@ -3348,6 +3353,96 @@ function printOrder() {
   const win = window.open('about:blank', '_blank');
   win.document.write(html);
   win.document.close();
+}
+
+// ── Avviso familiare / medico ───────────────────────────────
+let _notifyPtId = null;
+let _notifyTo = 'family';
+
+function buildNotifyText(pt) {
+  const lowMeds = (pt.medicines || []).filter(m => {
+    const st = getMedStatus(m);
+    return st.cls === 'low' || st.cls === 'expired';
+  });
+  const expMeds = (pt.medicines || []).filter(m => {
+    const ex = expiryStatus(m.expiry);
+    return ex && ex.cls !== 'ok';
+  });
+  const rec = _notifyTo === 'doctor' ? (pt.doctor || {}) : (pt.family || {});
+  let txt = (rec.name ? T('Gentile ', 'Dear ') + rec.name + ',\n' : '') +
+    T(`per ${pt.name} segnaliamo:`, `regarding ${pt.name}:`) + '\n\n';
+  if (lowMeds.length) {
+    txt += T('FARMACI IN ESAURIMENTO (da procurare):','MEDICINES RUNNING LOW:') + '\n';
+    lowMeds.forEach(m => {
+      const st = getMedStatus(m);
+      txt += `• ${m.name} — ${st.label}${m.totalQty != null ? ' (' + m.totalQty + ' ' + T('rimaste','left') + ')' : ''}\n`;
+    });
+    txt += '\n';
+  }
+  if (expMeds.length) {
+    txt += T('CONFEZIONI IN SCADENZA (da sostituire):','EXPIRING BOXES:') + '\n';
+    expMeds.forEach(m => {
+      const ex = expiryStatus(m.expiry);
+      txt += `• ${m.name} — ${T('scad.','exp.')} ${fmtExpiry(m.expiry)} (${ex.label})\n`;
+    });
+    txt += '\n';
+  }
+  txt += T('Può gentilmente provvedere? Grazie!','Could you kindly take care of it? Thank you!') +
+    (_fbFacilityName ? '\n' + _fbFacilityName : '');
+  return txt;
+}
+
+function showNotifyModal(ptId) {
+  const pt = D.patients.find(p => p.id === ptId);
+  if (!pt) return;
+  _notifyPtId = ptId;
+  const fam = pt.family || {};
+  const doc = pt.doctor || {};
+  if (_notifyTo === 'family' && !fam.name && doc.name) _notifyTo = 'doctor';
+  if (_notifyTo === 'doctor' && !doc.name && fam.name) _notifyTo = 'family';
+  const rec = _notifyTo === 'doctor' ? doc : fam;
+  const preview = buildNotifyText(pt);
+  showModal(`<div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:60;display:flex;align-items:flex-end" onclick="closeModal()">
+    <div style="background:var(--sur);width:100%;max-width:600px;margin:0 auto;border-radius:20px 20px 0 0;padding:20px;max-height:88vh;overflow-y:auto" onclick="event.stopPropagation()">
+      <div style="font-size:17px;font-weight:700;margin-bottom:12px">📣 ${T('Avvisa per','Notify for')} ${escHtml(pt.name)}</div>
+      ${(fam.name || doc.name) ? `
+      <div style="font-size:13px;color:var(--t2);margin-bottom:6px">${T('A chi lo mandi?','Send to whom?')}</div>
+      <div class="pills" style="margin-bottom:12px">
+        ${fam.name ? `<button class="pill ${_notifyTo === 'family' ? 'active' : ''}" onclick="_notifyTo='family';showNotifyModal('${ptId}')">👪 ${escHtml(fam.name)}</button>` : ''}
+        ${doc.name ? `<button class="pill ${_notifyTo === 'doctor' ? 'active' : ''}" onclick="_notifyTo='doctor';showNotifyModal('${ptId}')">🩺 ${escHtml(doc.name)}</button>` : ''}
+      </div>
+      <div style="background:var(--bg);border-radius:14px;padding:12px;font-size:13px;color:var(--t1);white-space:pre-wrap;margin-bottom:14px;max-height:220px;overflow-y:auto">${escHtml(preview)}</div>
+      <button class="btn-primary" ${rec.phone ? '' : 'disabled style="opacity:.5"'} onclick="sendNotifyWhatsApp()">💬 ${T('Invia su WhatsApp','Send via WhatsApp')}${rec.phone ? '' : ' (' + T('nessun numero','no number') + ')'}</button>
+      <button class="btn-secondary" ${rec.email ? '' : 'disabled style="opacity:.5"'} onclick="sendNotifyEmail()">✉️ ${T('Invia per email','Send by email')}${rec.email ? '' : ' (' + T('nessuna email','no email') + ')'}</button>
+      <button class="btn-secondary" onclick="copyNotify(this)">📋 ${T('Copia testo','Copy text')}</button>` : `
+      <div class="allergy-box" style="margin-bottom:10px">${T('Nessun contatto salvato per questo paziente. Aggiungi familiare o medico (con telefono/email) modificando la scheda paziente.','No contacts saved for this patient. Add family or doctor contacts by editing the patient.')}</div>
+      ${canEdit() ? `<button class="btn-primary" onclick="closeModal();navigate('add-patient',{patientId:'${ptId}',editMode:true})">✎ ${T('Aggiungi contatti','Add contacts')}</button>` : ''}`}
+      <button class="btn-secondary" onclick="closeModal()">${T('Chiudi','Close')}</button>
+    </div>
+  </div>`);
+}
+
+function sendNotifyWhatsApp() {
+  const pt = D.patients.find(p => p.id === _notifyPtId);
+  if (!pt) return;
+  const rec = _notifyTo === 'doctor' ? (pt.doctor || {}) : (pt.family || {});
+  const phone = (rec.phone || '').replace(/[^0-9+]/g, '').replace('+', '');
+  window.open('https://wa.me/' + phone + '?text=' + encodeURIComponent(buildNotifyText(pt)), '_blank');
+}
+
+function sendNotifyEmail() {
+  const pt = D.patients.find(p => p.id === _notifyPtId);
+  if (!pt) return;
+  const rec = _notifyTo === 'doctor' ? (pt.doctor || {}) : (pt.family || {});
+  location.href = 'mailto:' + (rec.email || '') +
+    '?subject=' + encodeURIComponent(T('Farmaci da procurare — ','Medicines needed — ') + pt.name) +
+    '&body=' + encodeURIComponent(buildNotifyText(pt));
+}
+
+function copyNotify(btn) {
+  const pt = D.patients.find(p => p.id === _notifyPtId);
+  if (!pt) return;
+  navigator.clipboard?.writeText(buildNotifyText(pt)).then(() => { if (btn) btn.textContent = '✓ ' + T('Copiato!','Copied!'); });
 }
 
 // ── PAGE: Storico movimenti ─────────────────────────────────
