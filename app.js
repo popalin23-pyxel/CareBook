@@ -97,6 +97,13 @@ function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 }
 
+// ── Storico movimenti ───────────────────────────────────────
+function logMove(action, name, qty, where) {
+  if (!D.movements) D.movements = [];
+  D.movements.push({ id: uid(), date: new Date().toISOString(), op: activeOp().name, action, name, qty, where });
+  if (D.movements.length > 600) D.movements = D.movements.slice(-500);
+}
+
 function fmtDate(isoStr) {
   if (!isoStr) return '';
   const d = new Date(isoStr);
@@ -144,7 +151,7 @@ function updateBottomNav(page) {
     home: ['home', 'alerts', 'calendar', 'db', 'add-db-med', 'search'],
     patients: ['patients', 'patient-detail', 'add-patient', 'add-med', 'add-visit'],
     locations: ['locations', 'location-detail'],
-    settings: ['settings']
+    settings: ['settings', 'history', 'stats']
   };
   nav.querySelectorAll('.bnav-btn').forEach(b => {
     b.classList.toggle('active', (groups[b.dataset.page] || []).includes(page));
@@ -169,6 +176,8 @@ function back() {
     'alerts': 'home',
     'locations': 'home',
     'location-detail': 'locations',
+    'history': 'settings',
+    'stats': 'settings',
     'db': 'home',
     'add-db-med': 'db',
     'settings': 'home',
@@ -195,6 +204,8 @@ function renderPage(page) {
     'add-db-med': renderAddDbMed,
     'scan': renderScan,
     'location-detail': renderLocationDetail,
+    'history': renderHistory,
+    'stats': renderStats,
     'settings': renderSettings,
     'search': renderSearch,
     'waiting': renderWaiting,
@@ -1264,6 +1275,7 @@ function saveRestock(medId) {
   const rexp = document.getElementById('f-restock-expiry')?.value;
   if (rexp && (!med.expiry || rexp < med.expiry)) med.expiry = rexp;
   recalcMedEnd(med);
+  logMove(T('Carico','Load'), med.name, qty, '👤 ' + pt.name);
 
   save();
   closeRestockForm();
@@ -2238,6 +2250,37 @@ function renderSettings() {
 
   document.getElementById('content-settings').innerHTML = `
     <div class="settings-sec">
+      <div class="settings-sec-title">${T('STRUMENTI','TOOLS')}</div>
+      <div class="settings-row" onclick="showOrderModal()" style="cursor:pointer">
+        <span class="settings-row-label">🛒 ${T('Ordine farmacia','Pharmacy order')}</span><span class="chevron">›</span>
+      </div>
+      <div class="settings-row" onclick="navigate('history')" style="cursor:pointer">
+        <span class="settings-row-label">🕐 ${T('Storico movimenti','Movement history')}</span><span class="chevron">›</span>
+      </div>
+      <div class="settings-row" onclick="navigate('stats')" style="cursor:pointer">
+        <span class="settings-row-label">📊 ${T('Statistiche consumi','Consumption stats')}</span><span class="chevron">›</span>
+      </div>
+      <div class="settings-row" onclick="printMonthlyReport()" style="cursor:pointer">
+        <span class="settings-row-label">📄 ${T('Report mensile (PDF/stampa)','Monthly report')}</span><span class="chevron">›</span>
+      </div>
+    </div>
+
+    <div class="settings-sec">
+      <div class="settings-sec-title">${T('CONTATTI FARMACIA','PHARMACY CONTACTS')}</div>
+      <div class="settings-sec-desc">${T('Usati per inviare gli ordini con un tocco','Used to send orders in one tap')}</div>
+      <div class="settings-row">
+        <span class="settings-row-label">✉️</span>
+        <input class="form-input" style="flex:1;padding:8px 12px" type="email" placeholder="${T('email farmacia','pharmacy email')}"
+          value="${escHtml(D.settings.pharmacyEmail || '')}" onchange="D.settings.pharmacyEmail=this.value.trim();save()">
+      </div>
+      <div class="settings-row">
+        <span class="settings-row-label">💬</span>
+        <input class="form-input" style="flex:1;padding:8px 12px" type="tel" placeholder="${T('WhatsApp farmacia (es. +39333...)','pharmacy WhatsApp')}"
+          value="${escHtml(D.settings.pharmacyPhone || '')}" onchange="D.settings.pharmacyPhone=this.value.trim();save()">
+      </div>
+    </div>
+
+    <div class="settings-sec">
       <div class="settings-sec-title">ACCOUNT</div>
       <div class="settings-row">
         <div style="flex:1">
@@ -2739,6 +2782,7 @@ function applyScanAction() {
     if (!dosePerDay(med)) warnHtml = `<div style="font-size:13px;color:var(--w);margin-top:6px">⚠ ${T('Questo farmaco non ha orari impostati: i giorni rimasti non possono essere calcolati. Aprilo dalla scheda paziente e imposta gli orari.','This medicine has no schedule set: days left cannot be calculated. Open it from the patient page and set the schedule.')}</div>`;
   }
 
+  logMove(_scanMode === 'add' ? T('Carico','Load') : T('Scarico','Unload'), info.name, Math.abs(signed), destName);
   save();
   closeScanModal();
   const res = g('scan-result');
@@ -2844,7 +2888,16 @@ function renderHome() {
           <div style="font-size:12px;color:var(--t2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">👤 ${escHtml(pt.name)}${v.location ? ' · ' + escHtml(v.location) : ''}</div>
         </div>
         <span class="chevron" style="margin-left:auto">›</span>
-      </div>`).join('')}`;
+      </div>`).join('')}
+    ${canEdit() && backupDue() ? `
+      <div class="h-today" onclick="exportData()" style="border:1.5px dashed var(--p)">
+        <div class="time">💾</div>
+        <div style="min-width:0;flex:1">
+          <div style="font-size:14px;font-weight:600">${T('Backup settimanale consigliato','Weekly backup recommended')}</div>
+          <div style="font-size:12px;color:var(--t2)">${T('Tocca per scaricare una copia di sicurezza dei dati','Tap to download a safety copy')}</div>
+        </div>
+        <span class="chevron" style="margin-left:auto">›</span>
+      </div>` : ''}`;
 }
 
 // ── PAGE: Notifiche ─────────────────────────────────────────
@@ -2857,6 +2910,10 @@ function renderAlerts() {
     <span class="bar-title">🔔 ${T('Notifiche','Alerts')}</span>`;
 
   let html = '';
+
+  if (low.length && canEdit()) {
+    html += `<button class="btn-primary" style="margin-bottom:6px" onclick="showOrderModal()">🛒 ${T('Genera ordine farmacia','Generate pharmacy order')} (${low.length})</button>`;
+  }
 
   html += `<div class="sec-hd">⚠ ${T('Da ricaricare','To restock')} (${low.length})</div>`;
   if (low.length) {
@@ -2970,6 +3027,7 @@ function renderLocationDetail() {
           <span onclick="locItemSet('${loc.id}','${it.id}')" style="cursor:pointer">${it.qty || 0}</span>
           <button onclick="locItemAdj('${loc.id}','${it.id}',1)">+</button>
         </div>
+        <button class="ib" title="${T('Sposta a paziente','Move to patient')}" style="color:#7c3aed;font-size:16px;padding:5px" onclick="showTransferModal('${loc.id}','${it.id}')">⇄</button>
         <button class="schedule-del" onclick="deleteLocItem('${loc.id}','${it.id}')">×</button>` : `<span style="font-weight:700;font-size:15px">${it.qty || 0}</span>`}
       </div>`;
     }).join('')}
@@ -2983,6 +3041,7 @@ function locItemAdj(locId, itemId, delta) {
   const it = loc && (loc.items || []).find(x => x.id === itemId);
   if (!it) return;
   it.qty = Math.max(0, (it.qty || 0) + delta);
+  logMove(T('Rettifica','Adjust'), it.name, delta, '📦 ' + loc.name);
   save();
   renderLocationDetail();
 }
@@ -2994,6 +3053,7 @@ function locItemSet(locId, itemId) {
   const v = parseFloat(prompt(T('Quantità attuale:','Current quantity:'), it.qty || 0));
   if (isNaN(v) || v < 0) return;
   it.qty = v;
+  logMove(T('Rettifica','Adjust'), it.name, v, '📦 ' + loc.name);
   save();
   renderLocationDetail();
 }
@@ -3076,6 +3136,7 @@ function saveLocItem(locId) {
   } else {
     loc.items.push({ id: uid(), name, qty, expiry });
   }
+  if (qty) logMove(T('Carico','Load'), name, qty, '📦 ' + loc.name);
   save();
   closeModal();
   renderLocationDetail();
@@ -3107,6 +3168,294 @@ function saveLocItemExpiry(locId, itemId) {
   save();
   closeModal();
   renderLocationDetail();
+}
+
+// ── Trasferimento deposito → paziente ───────────────────────
+let _transferCtx = null;
+
+function showTransferModal(locId, itemId) {
+  const loc = (D.locations || []).find(l => l.id === locId);
+  const it = loc && (loc.items || []).find(x => x.id === itemId);
+  if (!it) return;
+  const matches = [];
+  D.patients.forEach(pt => (pt.medicines || []).forEach(m => {
+    if (m.name.toLowerCase() === it.name.toLowerCase()) matches.push({pt, m});
+  }));
+  _transferCtx = { loc, it, matches };
+  showModal(`<div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:60;display:flex;align-items:flex-end" onclick="closeModal()">
+    <div style="background:var(--sur);width:100%;max-width:600px;margin:0 auto;border-radius:20px 20px 0 0;padding:20px" onclick="event.stopPropagation()">
+      <div style="font-size:17px;font-weight:700;margin-bottom:4px">⇄ ${T('Sposta a paziente','Move to patient')}</div>
+      <div style="font-size:13px;color:var(--t2);margin-bottom:14px">${escHtml(it.name)} — ${it.qty || 0} ${T('presenti in','in')} ${escHtml(loc.name)}</div>
+      ${matches.length ? `
+      <div class="form-group">
+        <label class="form-label">${T('Paziente','Patient')}</label>
+        <select class="form-input" id="transfer-target">${matches.map((x, i) => `<option value="${i}">👤 ${escHtml(x.pt.name)} — ${x.m.totalQty != null ? x.m.totalQty + ' ' + T('rimaste','left') : T('scorta non indicata','no stock')}</option>`).join('')}</select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">${T('Quante unità sposti?','How many units?')}</label>
+        <input class="form-input" id="transfer-qty" type="number" min="0.5" step="0.5" value="${Math.min(it.qty || 1, it.qty || 1)}" style="font-size:22px;font-weight:800;text-align:center">
+      </div>
+      <button class="btn-primary" onclick="applyTransfer()">${T('Sposta','Move')}</button>` : `
+      <div class="allergy-box" style="margin-bottom:10px">${T('Nessun paziente ha questo prodotto in terapia. Aggiungilo prima dalla scheda del paziente.','No patient has this product. Add it from the patient page first.')}</div>`}
+      <button class="btn-secondary" onclick="closeModal()">${T('Annulla','Cancel')}</button>
+    </div>
+  </div>`);
+}
+
+function applyTransfer() {
+  const ctx = _transferCtx;
+  if (!ctx) return;
+  const idx = parseInt(g('transfer-target')?.value, 10);
+  const target = ctx.matches[idx];
+  const qty = parseFloat(g('transfer-qty')?.value);
+  if (!target || !qty || qty <= 0) { alert(T('Inserisci una quantità valida','Enter a valid quantity')); return; }
+  if (qty > (ctx.it.qty || 0)) { alert(T('Nel deposito ce ne sono solo ' + (ctx.it.qty || 0), 'Only ' + (ctx.it.qty || 0) + ' available')); return; }
+  ctx.it.qty = Math.max(0, (ctx.it.qty || 0) - qty);
+  const med = target.m;
+  if (!med.restocks) med.restocks = [];
+  med.restocks.push({ id: uid(), qty, note: T('da ', 'from ') + ctx.loc.name, date: new Date().toISOString() });
+  med.totalQty = (med.totalQty || 0) + qty;
+  if (ctx.it.expiry && (!med.expiry || ctx.it.expiry < med.expiry)) med.expiry = ctx.it.expiry;
+  recalcMedEnd(med);
+  logMove(T('Trasferimento','Transfer'), ctx.it.name, qty, '📦 ' + ctx.loc.name + ' → 👤 ' + target.pt.name);
+  save();
+  closeModal();
+  renderLocationDetail();
+}
+
+// ── Ordine farmacia ─────────────────────────────────────────
+function buildPharmacyOrder() {
+  const low = getLowMeds();
+  return low.map(({patient, med, status}) => {
+    const dpd = dosePerDay(med) || 0;
+    const need30 = Math.max(0, Math.ceil(dpd * 30 - (med.totalQty || 0)));
+    const bc = Object.values(D.barcodes || {}).find(b => b.name.toLowerCase() === med.name.toLowerCase());
+    const boxes = bc && bc.boxQty && need30 > 0 ? Math.max(1, Math.ceil(need30 / bc.boxQty)) : null;
+    return { name: med.name, patient: patient.name, left: med.totalQty || 0, label: status.label, boxes, boxQty: bc?.boxQty || null };
+  });
+}
+
+function orderText() {
+  const lines = buildPharmacyOrder();
+  const rows = lines.map(l =>
+    `• ${l.name} — ${l.boxes ? l.boxes + ' ' + T(l.boxes === 1 ? 'confezione' : 'confezioni', 'boxes') + (l.boxQty ? ' (da ' + l.boxQty + ')' : '') : T('1+ confezione','1+ box')} (${T('per','for')} ${l.patient}, ${l.left} ${T('rimaste','left')})`
+  ).join('\n');
+  return T('ORDINE FARMACI', 'MEDICINE ORDER') + (_fbFacilityName ? ' — ' + _fbFacilityName : '') + '\n' + fmtDate(new Date().toISOString()) + '\n\n' + rows;
+}
+
+function showOrderModal() {
+  const lines = buildPharmacyOrder();
+  if (!lines.length) { alert(T('Nessun farmaco da ordinare: le scorte sono a posto! 🎉','Nothing to order: stocks are fine! 🎉')); return; }
+  const phEmail = D.settings.pharmacyEmail || '';
+  const phPhone = (D.settings.pharmacyPhone || '').replace(/[^0-9+]/g, '');
+  showModal(`<div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:60;display:flex;align-items:flex-end" onclick="closeModal()">
+    <div style="background:var(--sur);width:100%;max-width:600px;margin:0 auto;border-radius:20px 20px 0 0;padding:20px;max-height:85vh;overflow-y:auto" onclick="event.stopPropagation()">
+      <div style="font-size:17px;font-weight:700;margin-bottom:12px">🛒 ${T('Ordine farmacia','Pharmacy order')} (${lines.length})</div>
+      ${lines.map(l => `
+        <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--br)">
+          <div style="flex:1">
+            <div style="font-size:14px;font-weight:600">${escHtml(l.name)}</div>
+            <div style="font-size:12px;color:var(--t2)">👤 ${escHtml(l.patient)} • ${l.left} ${T('rimaste','left')} • ${l.label}</div>
+          </div>
+          <span style="font-size:13px;font-weight:800;color:var(--p);white-space:nowrap">${l.boxes ? '×' + l.boxes + ' conf.' : '1+ conf.'}</span>
+        </div>`).join('')}
+      <div style="margin-top:14px">
+        <button class="btn-primary" onclick="shareOrderWhatsApp()">💬 ${T('Invia su WhatsApp','Send via WhatsApp')}</button>
+        <button class="btn-secondary" onclick="shareOrderEmail()">✉️ ${T('Invia per email','Send by email')}${phEmail ? '' : ' *'}</button>
+        <button class="btn-secondary" onclick="printOrder()">🖨 ${T('Stampa','Print')}</button>
+        <button class="btn-secondary" onclick="copyOrder(this)">📋 ${T('Copia testo','Copy text')}</button>
+        <button class="btn-secondary" onclick="closeModal()">${T('Chiudi','Close')}</button>
+        ${!phEmail ? `<div style="font-size:12px;color:var(--t3);margin-top:8px">* ${T('Imposta email/telefono della farmacia in Impostazioni per averli già pronti','Set pharmacy email/phone in Settings')}</div>` : ''}
+      </div>
+    </div>
+  </div>`);
+}
+
+function shareOrderWhatsApp() {
+  const phPhone = (D.settings.pharmacyPhone || '').replace(/[^0-9+]/g, '').replace('+', '');
+  window.open('https://wa.me/' + (phPhone ? phPhone : '') + '?text=' + encodeURIComponent(orderText()), '_blank');
+}
+
+function shareOrderEmail() {
+  const to = D.settings.pharmacyEmail || '';
+  location.href = 'mailto:' + to + '?subject=' + encodeURIComponent(T('Ordine farmaci','Medicine order') + (_fbFacilityName ? ' — ' + _fbFacilityName : '')) + '&body=' + encodeURIComponent(orderText());
+}
+
+function copyOrder(btn) {
+  navigator.clipboard?.writeText(orderText()).then(() => { if (btn) btn.textContent = '✓ ' + T('Copiato!','Copied!'); });
+}
+
+function printOrder() {
+  const lines = buildPharmacyOrder();
+  const html = `<!DOCTYPE html><html lang="it"><head><meta charset="UTF-8"><title>${T('Ordine farmacia','Pharmacy order')}</title>
+  <style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:24px;color:#1a1a1a;max-width:800px}
+  h1{font-size:20px}table{width:100%;border-collapse:collapse;margin-top:14px;font-size:14px}
+  th{text-align:left;font-size:11px;color:#666;text-transform:uppercase;padding:6px 8px;border-bottom:2px solid #ddd}
+  td{padding:8px;border-bottom:1px solid #eee}
+  .foot{margin-top:26px;font-size:11px;color:#999;text-align:center}</style></head><body>
+  <h1>🛒 ${T('Ordine farmaci','Medicine order')}${_fbFacilityName ? ' — ' + escHtml(_fbFacilityName) : ''}</h1>
+  <div style="font-size:13px;color:#666">${fmtDate(new Date().toISOString())}</div>
+  <table><thead><tr><th>${T('Farmaco','Medicine')}</th><th>${T('Quantità','Quantity')}</th><th>${T('Paziente','Patient')}</th><th>${T('Rimaste','Left')}</th></tr></thead>
+  <tbody>${lines.map(l => `<tr><td><strong>${escHtml(l.name)}</strong></td><td>${l.boxes ? l.boxes + ' conf.' + (l.boxQty ? ' (da ' + l.boxQty + ')' : '') : '1+ conf.'}</td><td>${escHtml(l.patient)}</td><td>${l.left}</td></tr>`).join('')}</tbody></table>
+  <div class="foot">CareStock • ${fmtDatetime(new Date().toISOString())}</div>
+  <script>window.print();<\/script></body></html>`;
+  const win = window.open('about:blank', '_blank');
+  win.document.write(html);
+  win.document.close();
+}
+
+// ── PAGE: Storico movimenti ─────────────────────────────────
+function renderHistory() {
+  g('bar-history').innerHTML = `
+    <button class="bar-back" onclick="back()">${svgIcon('ic-arrow-left',22)}</button>
+    <span class="bar-title">🕐 ${T('Storico movimenti','Movement history')}</span>`;
+  g('content-history').innerHTML = `<div class="search-wrap">${svgIcon('ic-search',16)}
+    <input class="search-inp" placeholder="${T('Cerca prodotto, deposito, operatore...','Search...')}" value="${escHtml(S.histSearch || '')}"
+      oninput="S.histSearch=this.value;renderHistoryList()"></div>
+    <div id="hist-list"></div>`;
+  renderHistoryList();
+}
+
+function renderHistoryList() {
+  const el = g('hist-list');
+  if (!el) return;
+  const mov = [...(D.movements || [])].reverse();
+  const q = (S.histSearch || '').toLowerCase();
+  const filtered = q ? mov.filter(m => (m.name + ' ' + m.where + ' ' + m.op).toLowerCase().includes(q)) : mov;
+  const ICONS = {};
+  ICONS[T('Carico','Load')] = ['＋', 'var(--p)'];
+  ICONS[T('Scarico','Unload')] = ['−', 'var(--w)'];
+  ICONS[T('Trasferimento','Transfer')] = ['⇄', '#7c3aed'];
+  ICONS[T('Rettifica','Adjust')] = ['✎', 'var(--t3)'];
+  let lastDay = '';
+  let html = '';
+  if (!filtered.length) html = `<div class="empty">${T('Nessun movimento registrato ancora. I carichi e scarichi da scanner, ricariche e trasferimenti compariranno qui.','No movements yet.')}</div>`;
+  filtered.slice(0, 200).forEach(m => {
+    const day = fmtDate(m.date);
+    if (day !== lastDay) { html += `<div class="sec-hd">${day}</div>`; lastDay = day; }
+    const ic = ICONS[m.action] || ['•', 'var(--t2)'];
+    const isAdj = m.action === T('Rettifica','Adjust');
+    html += `<div class="db-item">
+      <div class="db-item-icon" style="border-color:${ic[1]};color:${ic[1]};font-weight:800">${ic[0]}</div>
+      <div class="db-item-info">
+        <div class="db-item-name">${escHtml(m.name)} <span style="color:${ic[1]};font-weight:700">${isAdj ? '→ ' : ''}${m.qty}</span></div>
+        <div class="db-item-sub">${escHtml(m.where)} • ${escHtml(m.op)} • ${new Date(m.date).toTimeString().slice(0,5)}</div>
+      </div>
+    </div>`;
+  });
+  el.innerHTML = html;
+}
+
+// ── PAGE: Statistiche consumi ───────────────────────────────
+function renderStats() {
+  g('bar-stats').innerHTML = `
+    <button class="bar-back" onclick="back()">${svgIcon('ic-arrow-left',22)}</button>
+    <span class="bar-title">📊 ${T('Statistiche consumi','Consumption stats')}</span>`;
+  const off = S.statsMonth || 0;
+  const now = new Date();
+  const target = new Date(now.getFullYear(), now.getMonth() - off, 1);
+  const mKey = target.toISOString().slice(0, 7);
+  const mov = (D.movements || []).filter(m => (m.date || '').slice(0, 7) === mKey);
+  const unloadLbl = T('Scarico','Unload');
+  const loadLbl = T('Carico','Load');
+  const transferLbl = T('Trasferimento','Transfer');
+  const consumed = {};
+  mov.forEach(m => {
+    if (m.action === unloadLbl || m.action === transferLbl) consumed[m.name] = (consumed[m.name] || 0) + Math.abs(m.qty || 0);
+  });
+  const rows = Object.entries(consumed).sort((a, b) => b[1] - a[1]).slice(0, 15);
+  const maxV = rows.length ? rows[0][1] : 1;
+  const nLoad = mov.filter(m => m.action === loadLbl).length;
+  const nUnload = mov.filter(m => m.action === unloadLbl).length;
+  const nTransfer = mov.filter(m => m.action === transferLbl).length;
+  g('content-stats').innerHTML = `
+    <div class="cal-toggle" style="margin:0 auto 16px">
+      <button class="cal-tab" onclick="S.statsMonth=(S.statsMonth||0)+1;renderStats()">‹</button>
+      <span style="padding:8px 16px;font-size:14px;font-weight:700">${MONTHS_IT[target.getMonth()]} ${target.getFullYear()}</span>
+      <button class="cal-tab" ${off === 0 ? 'disabled style="opacity:.3"' : ''} onclick="S.statsMonth=Math.max(0,(S.statsMonth||0)-1);renderStats()">›</button>
+    </div>
+    <div class="stat-row">
+      <div class="stat-tile"><div class="num">${nLoad}</div><div class="lbl">${T('Carichi','Loads')}</div></div>
+      <div class="stat-tile"><div class="num" style="color:var(--w)">${nUnload}</div><div class="lbl">${T('Scarichi','Unloads')}</div></div>
+      <div class="stat-tile"><div class="num" style="color:#7c3aed">${nTransfer}</div><div class="lbl">${T('Trasferimenti','Transfers')}</div></div>
+    </div>
+    <div class="home-card">
+      <div class="home-card-hd">💊 ${T('Consumi del mese (scarichi + trasferimenti)','Monthly consumption')}</div>
+      ${rows.length ? rows.map(([name, v]) => `
+        <div style="padding:7px 0">
+          <div style="display:flex;justify-content:space-between;font-size:13.5px;margin-bottom:4px">
+            <span style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-right:8px">${escHtml(name)}</span>
+            <strong style="color:var(--p)">${v}</strong>
+          </div>
+          <div style="background:var(--bg);border-radius:50px;height:8px;overflow:hidden">
+            <div style="background:var(--grad);height:100%;border-radius:50px;width:${Math.max(4, Math.round(v / maxV * 100))}%"></div>
+          </div>
+        </div>`).join('') : `<div class="home-empty">${T('Nessun movimento in questo mese','No movements this month')}</div>`}
+    </div>
+    <div style="font-size:12px;color:var(--t3);text-align:center;margin-top:6px">${T('I dati vengono dai movimenti registrati (scanner, ricariche, trasferimenti, rettifiche)','Data comes from recorded movements')}</div>`;
+}
+
+// ── Report mensile stampabile ───────────────────────────────
+function printMonthlyReport() {
+  const now = new Date();
+  const mKey = now.toISOString().slice(0, 7);
+  const mov = (D.movements || []).filter(m => (m.date || '').slice(0, 7) === mKey);
+  const expiring = getExpiringItems();
+  const low = getLowMeds();
+  const consumed = {};
+  mov.forEach(m => {
+    if (m.action === T('Scarico','Unload') || m.action === T('Trasferimento','Transfer')) consumed[m.name] = (consumed[m.name] || 0) + Math.abs(m.qty || 0);
+  });
+  const consRows = Object.entries(consumed).sort((a, b) => b[1] - a[1]);
+  let stockRows = '';
+  D.patients.forEach(pt => (pt.medicines || []).forEach(m => {
+    const st = getMedStatus(m);
+    stockRows += `<tr><td>${escHtml(pt.name)}</td><td><strong>${escHtml(m.name)}</strong></td><td>${m.totalQty ?? '—'}</td><td>${m.endDate ? fmtDate(m.endDate) : '—'}</td><td>${m.expiry ? fmtExpiry(m.expiry) : '—'}</td><td>${st.label || '—'}</td></tr>`;
+  }));
+  let locRows = '';
+  (D.locations || []).forEach(l => (l.items || []).forEach(it => {
+    locRows += `<tr><td>${escHtml(l.name)}</td><td><strong>${escHtml(it.name)}</strong></td><td>${it.qty || 0}</td><td>${it.expiry ? fmtExpiry(it.expiry) : '—'}</td></tr>`;
+  }));
+  const html = `<!DOCTYPE html><html lang="it"><head><meta charset="UTF-8"><title>Report ${mKey}</title>
+  <style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:24px;color:#1a1a1a;max-width:900px}
+  h1{font-size:22px;margin-bottom:2px}h2{font-size:15px;margin:22px 0 8px;border-bottom:2px solid #0d9488;padding-bottom:4px;color:#0d9488}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th{text-align:left;font-size:10.5px;color:#666;text-transform:uppercase;padding:5px 7px;border-bottom:2px solid #ddd}
+  td{padding:6px 7px;border-bottom:1px solid #eee}
+  .foot{margin-top:28px;font-size:11px;color:#999;text-align:center}
+  @media print{body{margin:10px}}</style></head><body>
+  <h1>📄 ${T('Report mensile','Monthly report')}${_fbFacilityName ? ' — ' + escHtml(_fbFacilityName) : ''}</h1>
+  <div style="font-size:13px;color:#666">${MONTHS_IT[now.getMonth()]} ${now.getFullYear()} • ${T('generato il','generated on')} ${fmtDatetime(now.toISOString())}</div>
+  <h2>${T('Riepilogo','Summary')}</h2>
+  <table><tbody>
+    <tr><td>${T('Pazienti in struttura','Patients')}</td><td><strong>${D.patients.length}</strong></td></tr>
+    <tr><td>${T('Scorte in esaurimento','Low stock')}</td><td><strong>${low.length}</strong></td></tr>
+    <tr><td>${T('Prodotti in scadenza (30 gg)','Expiring (30d)')}</td><td><strong>${expiring.length}</strong></td></tr>
+    <tr><td>${T('Movimenti del mese','Movements this month')}</td><td><strong>${mov.length}</strong></td></tr>
+  </tbody></table>
+  <h2>${T('Scorte pazienti','Patient stocks')}</h2>
+  <table><thead><tr><th>${T('Paziente','Patient')}</th><th>${T('Farmaco','Medicine')}</th><th>${T('Rimaste','Left')}</th><th>${T('Fine prevista','Expected end')}</th><th>${T('Scadenza','Expiry')}</th><th>${T('Stato','Status')}</th></tr></thead><tbody>${stockRows || '<tr><td colspan="6">—</td></tr>'}</tbody></table>
+  ${locRows ? `<h2>${T('Depositi','Storage')}</h2>
+  <table><thead><tr><th>${T('Deposito','Storage')}</th><th>${T('Prodotto','Product')}</th><th>${T('Quantità','Qty')}</th><th>${T('Scadenza','Expiry')}</th></tr></thead><tbody>${locRows}</tbody></table>` : ''}
+  ${expiring.length ? `<h2>⏰ ${T('In scadenza','Expiring')}</h2>
+  <table><thead><tr><th>${T('Prodotto','Product')}</th><th>${T('Dove','Where')}</th><th>${T('Scadenza','Expiry')}</th></tr></thead>
+  <tbody>${expiring.map(e => `<tr><td><strong>${escHtml(e.name)}</strong></td><td>${e.icon} ${escHtml(e.where)}</td><td>${fmtExpiry(e.expiry)} (${e.st.label})</td></tr>`).join('')}</tbody></table>` : ''}
+  ${consRows.length ? `<h2>💊 ${T('Consumi del mese','Monthly consumption')}</h2>
+  <table><thead><tr><th>${T('Prodotto','Product')}</th><th>${T('Unità consumate','Units used')}</th></tr></thead>
+  <tbody>${consRows.map(([n, v]) => `<tr><td>${escHtml(n)}</td><td><strong>${v}</strong></td></tr>`).join('')}</tbody></table>` : ''}
+  <div class="foot">CareStock • ${fmtDatetime(now.toISOString())}</div>
+  <script>window.print();<\/script></body></html>`;
+  const win = window.open('about:blank', '_blank');
+  win.document.write(html);
+  win.document.close();
+}
+
+// ── Backup settimanale ──────────────────────────────────────
+function backupDue() {
+  try {
+    const last = localStorage.getItem('cs_last_backup');
+    return !last || (Date.now() - new Date(last).getTime()) > 7 * 86400000;
+  } catch(e) { return false; }
 }
 
 // ── Riconoscimento da foto (OCR) ────────────────────────────
@@ -3389,6 +3738,8 @@ function exportData() {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+  try { localStorage.setItem('cs_last_backup', new Date().toISOString()); } catch(e) {}
+  if (S.page === 'home') renderPage('home');
 }
 
 function importData() {
