@@ -3243,8 +3243,9 @@ function orderText() {
   const rows = _orderLines.filter(l => l.boxes > 0).map(l =>
     `• ${l.name} — ${l.boxes} ${T(l.boxes === 1 ? 'confezione' : 'confezioni', 'boxes')}${l.boxQty ? ' (da ' + l.boxQty + ')' : ''} (${T('per','for')} ${l.patient}, ${l.left} ${T('rimaste','left')})`
   ).join('\n');
+  const cov = _orderDays === 'manual' ? T('quantità decise a mano','manual quantities') : T('copertura','coverage') + ' ' + _orderDays + ' ' + T('giorni','days');
   return T('ORDINE FARMACI', 'MEDICINE ORDER') + (_fbFacilityName ? ' — ' + _fbFacilityName : '') + '\n'
-    + fmtDate(new Date().toISOString()) + ' · ' + T('copertura', 'coverage') + ' ' + _orderDays + ' ' + T('giorni','days') + '\n\n' + rows;
+    + fmtDate(new Date().toISOString()) + ' · ' + cov + '\n\n' + rows;
 }
 
 function showOrderModal() {
@@ -3257,8 +3258,18 @@ function showOrderModal() {
 
 function orderSetDays(d) {
   _orderDays = d;
-  _orderLines = buildPharmacyOrder(d);
+  if (d === 'manual') {
+    _orderLines = buildPharmacyOrder(30).map(l => ({ ...l, boxes: 1 }));
+  } else {
+    _orderLines = buildPharmacyOrder(d);
+  }
   renderOrderModal();
+}
+
+function orderSetBoxes(i, val) {
+  const l = _orderLines[i];
+  if (!l) return;
+  l.boxes = Math.max(0, parseInt(val, 10) || 0);
 }
 
 function orderAdj(i, delta) {
@@ -3266,7 +3277,7 @@ function orderAdj(i, delta) {
   if (!l) return;
   l.boxes = Math.max(0, (l.boxes || 0) + delta);
   const n = g('ord-n-' + i);
-  if (n) { n.textContent = l.boxes; n.parentElement.style.opacity = l.boxes === 0 ? '.4' : '1'; }
+  if (n) n.value = l.boxes;
 }
 
 function renderOrderModal() {
@@ -3274,9 +3285,10 @@ function renderOrderModal() {
   showModal(`<div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:60;display:flex;align-items:flex-end" onclick="closeModal()">
     <div style="background:var(--sur);width:100%;max-width:600px;margin:0 auto;border-radius:20px 20px 0 0;padding:20px;max-height:88vh;overflow-y:auto" onclick="event.stopPropagation()">
       <div style="font-size:17px;font-weight:700;margin-bottom:10px">🛒 ${T('Ordine farmacia','Pharmacy order')} (${_orderLines.length})</div>
-      <div style="font-size:13px;color:var(--t2);margin-bottom:6px">${T('Copertura: per quanti giorni ordini?','Coverage: how many days?')}</div>
+      <div style="font-size:13px;color:var(--t2);margin-bottom:6px">${T('Confezioni: calcolate in automatico o scritte da te','Boxes: auto-calculated or set by you')}</div>
       <div class="pills" style="margin-bottom:12px">
-        ${[30, 60, 90].map(d => `<button class="pill ${_orderDays === d ? 'active' : ''}" onclick="orderSetDays(${d})">${d} ${T('giorni','days')}</button>`).join('')}
+        ${[30, 60, 90].map(d => `<button class="pill ${_orderDays === d ? 'active' : ''}" onclick="orderSetDays(${d})">${d} ${T('gg','d')}</button>`).join('')}
+        <button class="pill ${_orderDays === 'manual' ? 'active' : ''}" onclick="orderSetDays('manual')">✎ ${T('A mano','Manual')}</button>
       </div>
       ${_orderLines.map((l, i) => `
         <div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--br)">
@@ -3286,7 +3298,8 @@ function renderOrderModal() {
           </div>
           <div class="qty-ctrl">
             <button onclick="orderAdj(${i},-1)">−</button>
-            <span id="ord-n-${i}">${l.boxes}</span>
+            <input id="ord-n-${i}" type="number" min="0" value="${l.boxes}" oninput="orderSetBoxes(${i},this.value)"
+              style="width:44px;text-align:center;font-size:15px;font-weight:700;border:none;background:none;color:var(--t1)">
             <button onclick="orderAdj(${i},1)">+</button>
           </div>
           <span style="font-size:12px;color:var(--t2)">conf.</span>
@@ -3327,7 +3340,7 @@ function printOrder() {
   td{padding:8px;border-bottom:1px solid #eee}
   .foot{margin-top:26px;font-size:11px;color:#999;text-align:center}</style></head><body>
   <h1>🛒 ${T('Ordine farmaci','Medicine order')}${_fbFacilityName ? ' — ' + escHtml(_fbFacilityName) : ''}</h1>
-  <div style="font-size:13px;color:#666">${fmtDate(new Date().toISOString())} · ${T('copertura','coverage')} ${_orderDays} ${T('giorni','days')}</div>
+  <div style="font-size:13px;color:#666">${fmtDate(new Date().toISOString())} · ${_orderDays === 'manual' ? T('quantità decise a mano','manual quantities') : T('copertura','coverage') + ' ' + _orderDays + ' ' + T('giorni','days')}</div>
   <table><thead><tr><th>${T('Farmaco','Medicine')}</th><th>${T('Confezioni','Boxes')}</th><th>${T('Paziente','Patient')}</th><th>${T('Rimaste','Left')}</th></tr></thead>
   <tbody>${lines.map(l => `<tr><td><strong>${escHtml(l.name)}</strong></td><td>${l.boxes}${l.boxQty ? ' (da ' + l.boxQty + ')' : ''}</td><td>${escHtml(l.patient)}</td><td>${l.left}</td></tr>`).join('')}</tbody></table>
   <div class="foot">CareStock • ${fmtDatetime(new Date().toISOString())}</div>
