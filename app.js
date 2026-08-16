@@ -1,5 +1,5 @@
 /* CareStock PWA */
-const APP_VERSION = '13';
+const APP_VERSION = '14';
 'use strict';
 
 // ── Constants ──────────────────────────────────────────────
@@ -42,6 +42,8 @@ function stopFbListeners() {
     _fbUnsubs.forEach(u => { try { u(); } catch(e) {} });
     _fbUnsubs = [];
   }
+  if (typeof _saveTimer !== 'undefined') clearTimeout(_saveTimer);
+  if (typeof emptyData === 'function') D = emptyData();
 }
 let _fbFacilityId = null;
 let _fbFacilityName = '';
@@ -79,19 +81,37 @@ const S = {
 // ── Data ────────────────────────────────────────────────────
 let D = loadData();
 
-function loadData() {
-  try {
-    const raw = localStorage.getItem(LS);
-    if (raw) return JSON.parse(raw);
-  } catch(e) {}
+function emptyData() {
   const opId = uid();
   return {
     patients: [],
+    locations: [],
+    movements: [],
     medicineDb: [],
+    barcodes: {},
     operators: [{id: opId, name: 'Operatore', color: OP_COLORS[0]}],
     settings: {language: 'it', alertDays: 7, activeOperatorId: opId}
   };
 }
+
+// La copia locale è separata per struttura: i dati di una struttura non
+// possono in nessun caso comparire in un'altra.
+function cacheKey() { return _fbFacilityId ? LS + ':' + _fbFacilityId : null; }
+
+function loadData() { return emptyData(); }
+
+function loadCache() {
+  const k = cacheKey();
+  if (!k) return null;
+  try {
+    const raw = localStorage.getItem(k);
+    if (raw) return JSON.parse(raw);
+  } catch(e) {}
+  return null;
+}
+
+// Ripulisce le copie locali del vecchio formato (non separate per struttura)
+try { localStorage.removeItem(LS); } catch(e) {}
 
 // Archivio v2: il documento della struttura contiene solo le impostazioni;
 // pazienti, depositi e movimenti stanno in sottocollezioni separate.
@@ -134,7 +154,8 @@ function markPending() {
 }
 
 function save() {
-  try { localStorage.setItem(LS, JSON.stringify(D)); } catch(e) {}
+  const k = cacheKey();
+  if (k) { try { localStorage.setItem(k, JSON.stringify(D)); } catch(e) {} }
   if (!canSync()) return;
   markPending();
   clearTimeout(_saveTimer);
@@ -145,7 +166,14 @@ function save() {
 // i riferimenti tenuti dalle finestre aperte restano validi, e una modifica
 // fatta qui e non ancora salvata non viene mai cancellata da un aggiornamento
 // in arrivo da un altro operatore.
-function mergeList(local, serverList, syncedMap) {
+function mergeList(local, serverList, syncedMap, isFirst) {
+  if (isFirst) {
+    // Primo caricamento di questa struttura: si prende esattamente ciò che
+    // c'è sul server, senza conservare nulla di quanto era in memoria.
+    local.length = 0;
+    serverList.forEach(o => local.push(o));
+    return local;
+  }
   const byId = {};
   local.forEach(o => { if (o && o.id) byId[o.id] = o; });
   const onServer = {};
@@ -692,7 +720,8 @@ const LIVE_PAGES = ['home', 'alerts', 'order', 'locations', 'location-detail',
 let _fbUnsubs = [];
 
 function refreshLive() {
-  try { localStorage.setItem(LS, JSON.stringify(D)); } catch(e) {}
+  const k = cacheKey();
+  if (k) { try { localStorage.setItem(k, JSON.stringify(D)); } catch(e) {} }
   if (['login', 'register', 'waiting', 'super-admin'].includes(S.page)) {
     navigate('home');
     checkPinOnStart();
@@ -728,7 +757,11 @@ async function setupFbListeners() {
   _fbUnsubs = [];
   _synced = { patients: {}, locations: {}, meta: '' };
   _pending = { patients: {}, locations: {}, meta: false };
-  if (!_fbFacilityId) return;
+  clearTimeout(_saveTimer);
+  if (!_fbFacilityId) { D = emptyData(); return; }
+  // Si riparte dalla copia locale DI QUESTA struttura (o da zero)
+  D = loadCache() || emptyData();
+  let firstPatients = true, firstLocations = true;
   const ref = facilityRef();
 
   let meta = {};
@@ -786,7 +819,8 @@ async function setupFbListeners() {
       seen[doc.id] = JSON.stringify(p);
     });
     if (!D.patients) D.patients = [];
-    mergeList(D.patients, list, _synced.patients);
+    mergeList(D.patients, list, _synced.patients, firstPatients);
+    firstPatients = false;
     const localP = {};
     D.patients.forEach(p => { if (p && p.id) localP[p.id] = JSON.stringify(p); });
     Object.keys(seen).forEach(id => { if (localP[id] === seen[id]) _synced.patients[id] = seen[id]; });
@@ -803,7 +837,8 @@ async function setupFbListeners() {
       seen[doc.id] = JSON.stringify(l);
     });
     if (!D.locations) D.locations = [];
-    mergeList(D.locations, list, _synced.locations);
+    mergeList(D.locations, list, _synced.locations, firstLocations);
+    firstLocations = false;
     const localL = {};
     D.locations.forEach(l => { if (l && l.id) localL[l.id] = JSON.stringify(l); });
     Object.keys(seen).forEach(id => { if (localL[id] === seen[id]) _synced.locations[id] = seen[id]; });
@@ -975,6 +1010,7 @@ function renderSuperAdmin() {
 }
 
 function superAdminEnterFacility(facilityId, facilityName) {
+  stopFbListeners();
   _fbFacilityId = facilityId;
   _fbFacilityName = facilityName;
   _fbRole = 'admin';
