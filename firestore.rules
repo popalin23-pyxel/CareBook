@@ -1,0 +1,123 @@
+rules_version = '2';
+
+// ─────────────────────────────────────────────────────────────
+//  CareStock — Regole di sicurezza Firestore
+//  Isolamento multi-struttura (multi-tenant) imposto lato server.
+//
+//  Modello dati:
+//    users/{uid}          { email, createdAt, role, facilityId }
+//    facilities/{id}      { id, name, createdAt, createdBy }
+//    appData/{facilityId} { patients[], locations[], barcodes{}, ... }
+//
+//  Ruoli: 'admin' | 'nurse-write' | 'nurse-read'
+//  Il Super Admin è identificato dall'email nel token di autenticazione.
+// ─────────────────────────────────────────────────────────────
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Funzioni di appoggio ──────────────────────────────────
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isSuper() {
+      return signedIn() && request.auth.token.email == 'popalin23@gmail.com';
+    }
+
+    function hasProfile() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function profile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    // Struttura a cui l'utente è assegnato ('' se non assegnato)
+    function myFacility() {
+      return hasProfile() ? profile().get('facilityId', '') : '';
+    }
+
+    function myRole() {
+      return hasProfile() ? profile().get('role', '') : '';
+    }
+
+    function isFacilityAdmin() {
+      return myRole() == 'admin';
+    }
+
+    function canWriteData() {
+      return myRole() == 'admin' || myRole() == 'nurse-write';
+    }
+
+    // ── Dati clinici della struttura ──────────────────────────
+    // Contiene pazienti, terapie, depositi: il dato più sensibile.
+    match /appData/{facilityId} {
+
+      // Lettura: solo chi è assegnato a QUESTA struttura (o il super admin).
+      // Un utente della struttura A non può leggere appData della struttura B
+      // nemmeno chiamando l'API direttamente.
+      allow get: if isSuper()
+                 || (myFacility() != '' && myFacility() == facilityId);
+
+      // Nessuno può elencare tutte le strutture in blocco.
+      allow list: if isSuper();
+
+      // Scrittura: solo ruoli abilitati, e solo sulla propria struttura.
+      // I 'nurse-read' sono bloccati anche lato server, non solo nell'app.
+      allow write: if isSuper()
+                   || (myFacility() != '' && myFacility() == facilityId && canWriteData());
+    }
+
+    // ── Profili utente ────────────────────────────────────────
+    match /users/{userId} {
+
+      // Ognuno legge sé stesso; il super admin legge tutti;
+      // l'admin di struttura legge solo gli utenti della propria struttura.
+      allow get: if isSuper()
+                 || (signedIn() && request.auth.uid == userId)
+                 || (isFacilityAdmin() && resource.data.get('facilityId', '') == myFacility());
+
+      // Elenco: super admin (pannello) e admin di struttura
+      // (la query dell'app filtra già per facilityId).
+      allow list: if isSuper()
+                  || (isFacilityAdmin() && resource.data.get('facilityId', '') == myFacility());
+
+      // Alla registrazione l'utente crea SOLO il proprio profilo e
+      // NON può assegnarsi ruolo o struttura: quelli li mette il super admin.
+      allow create: if signedIn()
+                    && request.auth.uid == userId
+                    && request.resource.data.keys().hasOnly(['email', 'createdAt'])
+                    && request.resource.data.email == request.auth.token.email;
+
+      // Assegnazione struttura: solo super admin.
+      // L'admin di struttura può cambiare il ruolo dei SUOI utenti,
+      // ma non spostarli di struttura né modificare sé stesso.
+      allow update: if isSuper()
+                    || (
+                         isFacilityAdmin()
+                         && request.auth.uid != userId
+                         && resource.data.get('facilityId', '') == myFacility()
+                         && request.resource.data.facilityId == resource.data.facilityId
+                         && request.resource.data.email == resource.data.email
+                         && request.resource.data.role in ['admin', 'nurse-write', 'nurse-read']
+                       );
+
+      allow delete: if isSuper();
+    }
+
+    // ── Anagrafica strutture ──────────────────────────────────
+    match /facilities/{facilityId} {
+      // Ogni utente legge solo la scheda della propria struttura.
+      allow get: if isSuper() || (signedIn() && facilityId == myFacility());
+      allow list: if isSuper();
+      allow write: if isSuper();
+    }
+
+    // ── Tutto il resto è vietato ──────────────────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
