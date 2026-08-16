@@ -1,5 +1,5 @@
-const CACHE = 'medicinali-pwa-v9';
-const ASSETS = ['./', './index.html', './app.js?v=9', './manifest.json', './icon-192.png', './icon-512.png'];
+const CACHE = 'medicinali-pwa-v10';
+const ASSETS = ['./', './index.html', './app.js?v=10', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));
