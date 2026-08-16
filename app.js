@@ -1,5 +1,5 @@
 /* CareStock PWA */
-const APP_VERSION = '11';
+const APP_VERSION = '12';
 'use strict';
 
 // ── Constants ──────────────────────────────────────────────
@@ -2384,7 +2384,7 @@ function renderSettings() {
     const el = document.getElementById('notif-status');
     if (el) { el.textContent = T('Attive','Active'); el.style.color = 'var(--p)'; }
   }
-  if (canEdit()) renderUsersSection();
+  if (_fbRole === 'admin' || isSuperAdmin()) renderUsersSection();
 }
 
 let _selectedOpColor = OP_COLORS[0];
