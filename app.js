@@ -1,5 +1,5 @@
 /* CareStock PWA */
-const APP_VERSION = '9';
+const APP_VERSION = '10';
 'use strict';
 
 // ── Constants ──────────────────────────────────────────────
@@ -3312,8 +3312,9 @@ function renderOrderModal() {
         </div>`).join('')}
       <div style="font-size:12px;color:var(--t3);margin-top:6px">${T('Le confezioni sono calcolate in automatico: correggile con − e + se serve. Con 0 la riga non viene inviata.','Boxes are auto-calculated: adjust with − and +. Lines at 0 are not sent.')}</div>
       <div style="margin-top:12px">
-        <button class="btn-primary" onclick="shareOrderWhatsApp()">💬 ${T('Invia su WhatsApp','Send via WhatsApp')}</button>
-        <button class="btn-secondary" onclick="shareOrderEmail()">✉️ ${T('Invia per email','Send by email')}${phEmail ? '' : ' *'}</button>
+        <button class="btn-primary" onclick="sendOrderPdf()">📄 ${T('Invia PDF (email, WhatsApp...)','Send PDF (email, WhatsApp...)')}</button>
+        <button class="btn-secondary" onclick="shareOrderWhatsApp()">💬 ${T('Messaggio WhatsApp','WhatsApp message')}</button>
+        <button class="btn-secondary" onclick="shareOrderEmail()">✉️ ${T('Email (testo semplice)','Email (plain text)')}${phEmail ? '' : ' *'}</button>
         <button class="btn-secondary" onclick="printOrder()">🖨 ${T('Stampa','Print')}</button>
         <button class="btn-secondary" onclick="copyOrder(this)">📋 ${T('Copia testo','Copy text')}</button>
         <button class="btn-secondary" onclick="closeModal()">${T('Chiudi','Close')}</button>
@@ -3321,6 +3322,35 @@ function renderOrderModal() {
       </div>
     </div>
   </div>`);
+}
+
+function makeOrderPdfBlob() {
+  const items = _orderLines.filter(l => l.boxes > 0);
+  const lines = [];
+  lines.push({ text: T('Ordine farmaci','Medicine order'), size: 19, bold: true, gap: 26 });
+  if (_fbFacilityName) lines.push({ text: _fbFacilityName, size: 13, bold: true, gap: 18 });
+  lines.push({ text: fmtDate(new Date().toISOString()) + (_orderDays === 'manual' ? '' : '  ·  ' + T('copertura','coverage') + ' ' + _orderDays + ' ' + T('giorni','days')), size: 11, gap: 20 });
+  lines.push({ text: '', gap: 10 });
+  _wrapText(T('Vi chiediamo cortesemente di fornire i seguenti farmaci:','Please kindly supply the following medicines:'), 88).forEach(t => lines.push({ text: t, gap: 16 }));
+  lines.push({ text: '', gap: 8 });
+  items.forEach(l => {
+    const qty = l.boxes + ' ' + T(l.boxes === 1 ? 'confezione' : 'confezioni', l.boxes === 1 ? 'box' : 'boxes') + (l.boxQty ? ' (' + T('da','of') + ' ' + l.boxQty + ')' : '');
+    _wrapText('• ' + l.name + ' — ' + qty, 78).forEach((t, i) => lines.push({ text: i ? '   ' + t : t, size: 12.5, bold: true, gap: 18 }));
+    lines.push({ text: '   ' + T('per ','for ') + l.patient, size: 10.5, gap: 15 });
+  });
+  lines.push({ text: '', gap: 14 });
+  _wrapText(T('Grazie per la cortese collaborazione.','Thank you for your kind cooperation.'), 88).forEach(t => lines.push({ text: t, gap: 16 }));
+  if (_fbFacilityName) lines.push({ text: _fbFacilityName, bold: true, gap: 22 });
+  return makePdfBlob(lines);
+}
+
+async function sendOrderPdf() {
+  if (!_orderLines.filter(l => l.boxes > 0).length) { alert(T('Nessun farmaco da ordinare: metti almeno 1 confezione','Nothing to order: set at least 1 box')); return; }
+  const accomp = T('Buongiorno, in allegato il nostro ordine farmaci (PDF). Grazie!','Hello, please find our medicine order attached (PDF). Thank you!') +
+    (_fbFacilityName ? ' — ' + _fbFacilityName : '');
+  await sharePdfBlob(makeOrderPdfBlob(),
+    'ordine-farmaci-' + todayISO() + '.pdf',
+    T('Ordine farmaci','Medicine order'), accomp);
 }
 
 function shareOrderWhatsApp() {
@@ -3456,35 +3486,68 @@ function _pdfEsc(s) {
 }
 
 function makePdfBlob(lines) {
-  let y = 790;
-  const parts = ['BT'];
+  // Impagina: nuova pagina quando lo spazio finisce
+  const pages = [];
+  let cur = [], y = 790;
   lines.forEach(l => {
     const size = l.size || 11.5;
-    y -= (l.gap != null ? l.gap : size + 7);
-    if (l.text) parts.push(`/F${l.bold ? '2' : '1'} ${size} Tf 1 0 0 1 56 ${Math.round(y)} Tm (${_pdfEsc(l.text)}) Tj`);
+    const gap = (l.gap != null ? l.gap : size + 7);
+    if (y - gap < 56) { pages.push(cur); cur = []; y = 790; }
+    y -= gap;
+    if (l.text) cur.push(`/F${l.bold ? '2' : '1'} ${size} Tf 1 0 0 1 56 ${Math.round(y)} Tm (${_pdfEsc(l.text)}) Tj`);
   });
-  parts.push('ET');
-  const content = parts.join('\n');
-  const objs = [];
+  pages.push(cur);
+
+  const objs = {};
+  const pageIds = [];
+  let next = 5; // 1 catalogo, 2 pages, 3 font, 4 font grassetto
+  pages.forEach(() => { pageIds.push(next); next += 2; });
   objs[1] = '<< /Type /Catalog /Pages 2 0 R >>';
-  objs[2] = '<< /Type /Pages /Kids [3 0 R] /Count 1 >>';
-  objs[3] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >>';
-  objs[4] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>';
-  objs[5] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>';
-  objs[6] = `<< /Length ${content.length} >>\nstream\n${content}\nendstream`;
+  objs[2] = `<< /Type /Pages /Kids [${pageIds.map(id => id + ' 0 R').join(' ')}] /Count ${pages.length} >>`;
+  objs[3] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>';
+  objs[4] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>';
+  pages.forEach((ops, i) => {
+    const pid = pageIds[i], cid = pid + 1;
+    objs[pid] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${cid} 0 R >>`;
+    const content = 'BT\n' + ops.join('\n') + '\nET';
+    objs[cid] = `<< /Length ${content.length} >>\nstream\n${content}\nendstream`;
+  });
+
+  const total = next - 1;
   let pdf = '%PDF-1.4\n';
-  const offs = [];
-  for (let i = 1; i <= 6; i++) {
+  const offs = {};
+  for (let i = 1; i <= total; i++) {
     offs[i] = pdf.length;
     pdf += `${i} 0 obj\n${objs[i]}\nendobj\n`;
   }
   const xref = pdf.length;
-  pdf += 'xref\n0 7\n0000000000 65535 f \n' +
-    offs.slice(1).map(o => String(o).padStart(10, '0') + ' 00000 n \n').join('') +
-    `trailer\n<< /Size 7 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
+  let xrefStr = `xref\n0 ${total + 1}\n0000000000 65535 f \n`;
+  for (let i = 1; i <= total; i++) xrefStr += String(offs[i]).padStart(10, '0') + ' 00000 n \n';
+  pdf += xrefStr + `trailer\n<< /Size ${total + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
   const bytes = new Uint8Array(pdf.length);
   for (let i = 0; i < pdf.length; i++) bytes[i] = pdf.charCodeAt(i) & 0xff;
   return new Blob([bytes], { type: 'application/pdf' });
+}
+
+async function sharePdfBlob(blob, fname, title, text) {
+  const file = new File([blob], fname, { type: 'application/pdf' });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title, text });
+      return;
+    } catch(e) {
+      if (e && e.name === 'AbortError') return;
+    }
+  }
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fname;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  alert(T('PDF scaricato: allegalo alla mail o al messaggio','PDF downloaded: attach it to your email or message'));
 }
 
 function _wrapText(s, max) {
@@ -3524,30 +3587,13 @@ async function sendNotifyPdf() {
   const pt = D.patients.find(p => p.id === _notifyPtId);
   if (!pt) return;
   if (!notifySelectedMeds(pt).length) { alert(T('Spunta almeno un farmaco','Tick at least one medicine')); return; }
-  const blob = makeNotifyPdfBlob(pt);
-  const fname = T('farmaci','medicines') + '-' + pt.name.replace(/[^a-zA-Z0-9]+/g, '-').toLowerCase() + '.pdf';
-  const file = new File([blob], fname, { type: 'application/pdf' });
   const recN = _notifyTo === 'doctor' ? (pt.doctor || {}) : (pt.family || {});
   const accompText = (recN.name ? T('Gentile ','Dear ') + recN.name + ', ' : '') +
     T('ci occorrono questi farmaci (vedi PDF allegato). Grazie!','we need these medicines (see attached PDF). Thank you!') +
     (_fbFacilityName ? ' — ' + _fbFacilityName : '');
-  if (navigator.canShare && navigator.canShare({ files: [file] })) {
-    try {
-      await navigator.share({ files: [file], title: T('Farmaci da procurare','Medicines needed'), text: accompText });
-      return;
-    } catch(e) {
-      if (e && e.name === 'AbortError') return;
-    }
-  }
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = fname;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-  alert(T('PDF scaricato: allegalo alla mail o al messaggio','PDF downloaded: attach it to your email or message'));
+  await sharePdfBlob(makeNotifyPdfBlob(pt),
+    T('farmaci','medicines') + '-' + pt.name.replace(/[^a-zA-Z0-9]+/g, '-').toLowerCase() + '.pdf',
+    T('Farmaci da procurare','Medicines needed'), accompText);
 }
 
 function sendNotifyWhatsApp() {
