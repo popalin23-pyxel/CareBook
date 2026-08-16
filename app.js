@@ -1,5 +1,5 @@
 /* CareStock PWA */
-const APP_VERSION = '10';
+const APP_VERSION = '11';
 'use strict';
 
 // ── Constants ──────────────────────────────────────────────
@@ -149,7 +149,7 @@ function updateBottomNav(page) {
   nav.classList.toggle('visible', !hidden);
   if (hidden) return;
   const groups = {
-    home: ['home', 'alerts', 'calendar', 'db', 'add-db-med', 'search'],
+    home: ['home', 'alerts', 'calendar', 'db', 'add-db-med', 'search', 'order'],
     patients: ['patients', 'patient-detail', 'add-patient', 'add-med', 'add-visit'],
     locations: ['locations', 'location-detail'],
     settings: ['settings', 'history', 'stats']
@@ -177,6 +177,7 @@ function back() {
     'alerts': 'home',
     'locations': 'home',
     'location-detail': 'locations',
+    'order': 'home',
     'history': 'settings',
     'stats': 'settings',
     'db': 'home',
@@ -205,6 +206,7 @@ function renderPage(page) {
     'add-db-med': renderAddDbMed,
     'scan': renderScan,
     'location-detail': renderLocationDetail,
+    'order': renderOrder,
     'history': renderHistory,
     'stats': renderStats,
     'settings': renderSettings,
@@ -552,7 +554,7 @@ async function handleAuthChange(user) {
 function setupFbListeners() {
   if (_fbUnsubData) _fbUnsubData();
   if (!_fbFacilityId) return;
-  const LIVE_PAGES = ['home', 'alerts', 'locations', 'location-detail', 'patients', 'patient-detail', 'calendar', 'db', 'settings', 'search'];
+  const LIVE_PAGES = ['home', 'alerts', 'order', 'locations', 'location-detail', 'patients', 'patient-detail', 'calendar', 'db', 'settings', 'search'];
   _fbUnsubData = db.collection('appData').doc(_fbFacilityId).onSnapshot(snap => {
     if (snap.exists) {
       const data = snap.data();
@@ -2254,7 +2256,7 @@ function renderSettings() {
   document.getElementById('content-settings').innerHTML = `
     <div class="settings-sec">
       <div class="settings-sec-title">${T('STRUMENTI','TOOLS')}</div>
-      <div class="settings-row" onclick="showOrderModal()" style="cursor:pointer">
+      <div class="settings-row" onclick="startOrder()" style="cursor:pointer">
         <span class="settings-row-label">🛒 ${T('Ordine farmacia','Pharmacy order')}</span><span class="chevron">›</span>
       </div>
       <div class="settings-row" onclick="navigate('history')" style="cursor:pointer">
@@ -2885,6 +2887,16 @@ function renderHome() {
       </button>
     </div>
 
+    ${canEdit() ? `
+      <div class="h-today" onclick="startOrder()">
+        <div class="time">🛒</div>
+        <div style="min-width:0;flex:1">
+          <div style="font-size:14px;font-weight:600">${T('Ordine farmacia','Pharmacy order')}</div>
+          <div style="font-size:12px;color:var(--t2)">${T('Scegli pazienti e farmaci, invia il PDF','Pick patients and medicines, send the PDF')}</div>
+        </div>
+        <span class="chevron">›</span>
+      </div>` : ''}
+
     ${todayVisits.slice(0, 2).map(({pt, v}) => `
       <div class="h-today" onclick="navigate('patient-detail',{patientId:'${pt.id}'})">
         <div class="time">${new Date(v.date).toTimeString().slice(0,5)}</div>
@@ -2917,7 +2929,7 @@ function renderAlerts() {
   let html = '';
 
   if (low.length && canEdit()) {
-    html += `<button class="btn-primary" style="margin-bottom:6px" onclick="showOrderModal()">🛒 ${T('Genera ordine farmacia','Generate pharmacy order')} (${low.length})</button>`;
+    html += `<button class="btn-primary" style="margin-bottom:6px" onclick="startOrder()">🛒 ${T('Genera ordine farmacia','Generate pharmacy order')} (${low.length})</button>`;
   }
 
   html += `<div class="sec-hd">⚠ ${T('Da ricaricare','To restock')} (${low.length})</div>`;
@@ -3230,145 +3242,247 @@ function applyTransfer() {
 }
 
 // ── Ordine farmacia ─────────────────────────────────────────
-let _orderDays = 30;
-let _orderLines = [];
+let _orderSel = [];      // id pazienti selezionati
+let _orderQty = {};      // medId -> confezioni
+let _orderDays = 30;     // per il calcolo automatico ('manual' = a mano)
 
-function buildPharmacyOrder(days) {
-  const low = getLowMeds();
-  return low.map(({patient, med, status}) => {
-    const dpd = dosePerDay(med) || 0;
-    const need = Math.max(0, Math.ceil(dpd * days - (med.totalQty || 0)));
-    const bc = Object.values(D.barcodes || {}).find(b => b.name.toLowerCase() === med.name.toLowerCase());
-    const boxQty = bc?.boxQty || null;
-    const boxes = boxQty && need > 0 ? Math.max(1, Math.ceil(need / boxQty)) : 1;
-    return { name: med.name, patient: patient.name, left: med.totalQty || 0, label: status.label, boxes, boxQty };
+function startOrder() {
+  _orderSel = [];
+  _orderQty = {};
+  _orderDays = 30;
+  S.orderStep = 1;
+  navigate('order');
+}
+
+function orderMedsOf(pt) {
+  return (pt.medicines || []).slice().sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function orderBoxQty(name) {
+  const bc = Object.values(D.barcodes || {}).find(b => b.name.toLowerCase() === name.toLowerCase());
+  return bc?.boxQty || null;
+}
+
+function orderLines() {
+  const out = [];
+  _orderSel.forEach(pid => {
+    const pt = D.patients.find(p => p.id === pid);
+    if (!pt) return;
+    orderMedsOf(pt).forEach(m => {
+      const boxes = _orderQty[m.id] || 0;
+      if (boxes > 0) out.push({ name: m.name, patient: pt.name, boxes, boxQty: orderBoxQty(m.name) });
+    });
   });
+  return out;
+}
+
+function orderTotalBoxes() {
+  return orderLines().reduce((s, l) => s + l.boxes, 0);
+}
+
+// ---- Passo 1: scelta pazienti ----
+function toggleOrderPatient(id) {
+  const i = _orderSel.indexOf(id);
+  if (i >= 0) _orderSel.splice(i, 1);
+  else _orderSel.push(id);
+  renderOrder();
+}
+
+function orderSelectAll() {
+  _orderSel = _orderSel.length === D.patients.length ? [] : D.patients.map(p => p.id);
+  renderOrder();
+}
+
+function orderGoStep2() {
+  if (!_orderSel.length) { alert(T('Seleziona almeno un paziente','Select at least one patient')); return; }
+  orderAutoFill(_orderDays === 'manual' ? 30 : _orderDays);
+  S.orderStep = 2;
+  renderOrder();
+  window.scrollTo(0, 0);
+}
+
+// ---- Passo 2: confezioni ----
+function orderAutoFill(days) {
+  _orderDays = days;
+  _orderQty = {};
+  _orderSel.forEach(pid => {
+    const pt = D.patients.find(p => p.id === pid);
+    if (!pt) return;
+    orderMedsOf(pt).forEach(m => {
+      const st = getMedStatus(m);
+      const dpd = dosePerDay(m) || 0;
+      if (st.cls !== 'low' && st.cls !== 'expired') { _orderQty[m.id] = 0; return; }
+      const bq = orderBoxQty(m.name);
+      const need = Math.max(0, Math.ceil(dpd * days - (m.totalQty || 0)));
+      _orderQty[m.id] = bq && need > 0 ? Math.max(1, Math.ceil(need / bq)) : 1;
+    });
+  });
+  renderOrder();
+}
+
+function orderClearAll() {
+  _orderDays = 'manual';
+  _orderQty = {};
+  renderOrder();
+}
+
+function orderAdj(medId, delta) {
+  _orderQty[medId] = Math.max(0, (_orderQty[medId] || 0) + delta);
+  const inp = g('oq-' + medId);
+  if (inp) inp.value = _orderQty[medId];
+  const tot = g('order-total');
+  if (tot) tot.textContent = orderTotalBoxes();
+}
+
+function orderSetQty(medId, val) {
+  _orderQty[medId] = Math.max(0, parseInt(val, 10) || 0);
+  const tot = g('order-total');
+  if (tot) tot.textContent = orderTotalBoxes();
+}
+
+function renderOrder() {
+  const step = S.orderStep || 1;
+  g('bar-order').innerHTML = `
+    <button class="bar-back" onclick="${step === 2 ? "S.orderStep=1;renderOrder()" : "back()"}">${svgIcon('ic-arrow-left',22)}</button>
+    <span class="bar-title">🛒 ${step === 1 ? T('Ordine farmacia','Pharmacy order') : T('Quante confezioni?','How many boxes?')}</span>`;
+
+  if (step === 1) {
+    const all = _orderSel.length === D.patients.length && D.patients.length > 0;
+    g('content-order').innerHTML = `
+      <div style="font-size:14px;color:var(--t2);margin-bottom:10px">${T('Per quali pazienti vuoi ordinare? Puoi sceglierne anche più di uno.','Which patients? You can pick more than one.')}</div>
+      ${D.patients.length ? `<div class="pills" style="margin-bottom:10px">
+        <button class="pill ${all ? 'active' : ''}" onclick="orderSelectAll()">${all ? '✓ ' : ''}${T('Tutti i pazienti','All patients')}</button>
+      </div>` : ''}
+      ${D.patients.length ? D.patients.slice().sort((a, b) => a.name.localeCompare(b.name)).map(pt => {
+        const sel = _orderSel.includes(pt.id);
+        const nLow = (pt.medicines || []).filter(m => { const s = getMedStatus(m); return s.cls === 'low' || s.cls === 'expired'; }).length;
+        return `<div class="patient-card" style="cursor:pointer;${sel ? 'border-color:var(--p);background:var(--pl)' : ''}" onclick="toggleOrderPatient('${pt.id}')">
+          <div class="avatar" style="${sel ? 'background:var(--p);color:#fff' : ''}">${sel ? '✓' : escHtml(pt.name[0].toUpperCase())}</div>
+          <div class="patient-info">
+            <div class="patient-name">${escHtml(pt.name)}${pt.room ? ` <span class="badge">${escHtml(pt.room)}</span>` : ''}</div>
+            <div class="patient-sub">${(pt.medicines || []).length} ${T('farmaci','medicines')}${nLow ? ` · <span style="color:var(--w);font-weight:600">⚠ ${nLow} ${T('in esaurimento','running low')}</span>` : ''}</div>
+          </div>
+        </div>`;
+      }).join('') : `<div class="empty">${T('Nessun paziente inserito','No patients yet')}</div>`}
+      ${D.patients.length ? `<button class="btn-primary" onclick="orderGoStep2()" ${_orderSel.length ? '' : 'style="opacity:.5"'}>
+        ${T('Avanti','Next')}${_orderSel.length ? ` (${_orderSel.length} ${T(_orderSel.length === 1 ? 'paziente' : 'pazienti','patients')})` : ''} →
+      </button>` : ''}`;
+    return;
+  }
+
+  // Passo 2
+  const phEmail = D.settings.pharmacyEmail || '';
+  let body = '';
+  _orderSel.forEach(pid => {
+    const pt = D.patients.find(p => p.id === pid);
+    if (!pt) return;
+    const meds = orderMedsOf(pt);
+    body += `<div class="sec-hd">👤 ${escHtml(pt.name)}${pt.room ? ' · ' + T('stanza','room') + ' ' + escHtml(pt.room) : ''}</div>`;
+    if (!meds.length) { body += `<div class="home-empty" style="padding:8px 0 14px">${T('Nessun farmaco in scheda','No medicines')}</div>`; return; }
+    meds.forEach(m => {
+      const st = getMedStatus(m);
+      const low = st.cls === 'low' || st.cls === 'expired';
+      const bq = orderBoxQty(m.name);
+      body += `<div class="db-item">
+        <div class="db-item-info">
+          <div class="db-item-name">${escHtml(m.name)}</div>
+          <div class="db-item-sub">${low ? `<span style="color:var(--w);font-weight:600">⚠ ${st.label}</span>` : (st.label || T('in corso','ongoing'))}${bq ? ' · ' + T('scatola da','box of') + ' ' + bq : ''}</div>
+        </div>
+        <div class="qty-ctrl">
+          <button onclick="orderAdj('${m.id}',-1)">−</button>
+          <input id="oq-${m.id}" type="number" min="0" value="${_orderQty[m.id] || 0}" oninput="orderSetQty('${m.id}',this.value)"
+            style="width:42px;text-align:center;font-size:15px;font-weight:700;border:none;background:none;color:var(--t1)">
+          <button onclick="orderAdj('${m.id}',1)">+</button>
+        </div>
+        <span style="font-size:12px;color:var(--t2)">conf.</span>
+      </div>`;
+    });
+  });
+
+  g('content-order').innerHTML = `
+    <div style="font-size:13px;color:var(--t2);margin-bottom:6px">${T('Calcolo automatico delle confezioni, oppure decidi tu:','Auto-calculate boxes, or decide yourself:')}</div>
+    <div class="pills" style="margin-bottom:12px">
+      ${[30, 60, 90].map(d => `<button class="pill ${_orderDays === d ? 'active' : ''}" onclick="orderAutoFill(${d})">${d} ${T('gg','d')}</button>`).join('')}
+      <button class="pill ${_orderDays === 'manual' ? 'active' : ''}" onclick="orderClearAll()">✎ ${T('Azzera / a mano','Clear / manual')}</button>
+    </div>
+    ${body}
+    <div class="home-card" style="margin-top:16px;text-align:center">
+      <div style="font-size:13px;color:var(--t2)">${T('Totale da ordinare','Total to order')}</div>
+      <div style="font-size:26px;font-weight:800;color:var(--p)"><span id="order-total">${orderTotalBoxes()}</span> <span style="font-size:15px">${T('confezioni','boxes')}</span></div>
+    </div>
+    <button class="btn-primary" onclick="sendOrderPdf()">📄 ${T('Invia PDF (email, WhatsApp...)','Send PDF (email, WhatsApp...)')}</button>
+    <button class="btn-secondary" onclick="shareOrderWhatsApp()">💬 ${T('Messaggio WhatsApp','WhatsApp message')}</button>
+    <button class="btn-secondary" onclick="shareOrderEmail()">✉️ ${T('Email (testo semplice)','Email (plain text)')}${phEmail ? '' : ' *'}</button>
+    <button class="btn-secondary" onclick="printOrder()">🖨 ${T('Stampa','Print')}</button>
+    <button class="btn-secondary" onclick="copyOrder(this)">📋 ${T('Copia testo','Copy text')}</button>
+    ${!phEmail ? `<div style="font-size:12px;color:var(--t3);margin-top:8px;text-align:center">* ${T('Imposta email/WhatsApp della farmacia in Altro → Contatti farmacia','Set pharmacy contacts in Settings')}</div>` : ''}`;
 }
 
 function orderText() {
-  const rows = _orderLines.filter(l => l.boxes > 0).map(l =>
-    `• ${l.name} — ${l.boxes} ${T(l.boxes === 1 ? 'confezione' : 'confezioni', 'boxes')}${l.boxQty ? ' (da ' + l.boxQty + ')' : ''} (${T('per','for')} ${l.patient}, ${l.left} ${T('rimaste','left')})`
+  const rows = orderLines().map(l =>
+    `• ${l.name} — ${l.boxes} ${T(l.boxes === 1 ? 'confezione' : 'confezioni', 'boxes')}${l.boxQty ? ' (' + T('da','of') + ' ' + l.boxQty + ')' : ''} (${T('per','for')} ${l.patient})`
   ).join('\n');
-  const cov = _orderDays === 'manual' ? T('quantità decise a mano','manual quantities') : T('copertura','coverage') + ' ' + _orderDays + ' ' + T('giorni','days');
   return T('ORDINE FARMACI', 'MEDICINE ORDER') + (_fbFacilityName ? ' — ' + _fbFacilityName : '') + '\n'
-    + fmtDate(new Date().toISOString()) + ' · ' + cov + '\n\n' + rows;
+    + fmtDate(new Date().toISOString()) + '\n\n' + rows;
 }
 
-function showOrderModal() {
-  const low = getLowMeds();
-  if (!low.length) { alert(T('Nessun farmaco da ordinare: le scorte sono a posto! 🎉','Nothing to order: stocks are fine! 🎉')); return; }
-  _orderDays = 30;
-  _orderLines = buildPharmacyOrder(_orderDays);
-  renderOrderModal();
-}
-
-function orderSetDays(d) {
-  _orderDays = d;
-  if (d === 'manual') {
-    _orderLines = buildPharmacyOrder(30).map(l => ({ ...l, boxes: 1 }));
-  } else {
-    _orderLines = buildPharmacyOrder(d);
-  }
-  renderOrderModal();
-}
-
-function orderSetBoxes(i, val) {
-  const l = _orderLines[i];
-  if (!l) return;
-  l.boxes = Math.max(0, parseInt(val, 10) || 0);
-}
-
-function orderAdj(i, delta) {
-  const l = _orderLines[i];
-  if (!l) return;
-  l.boxes = Math.max(0, (l.boxes || 0) + delta);
-  const n = g('ord-n-' + i);
-  if (n) n.value = l.boxes;
-}
-
-function renderOrderModal() {
-  const phEmail = D.settings.pharmacyEmail || '';
-  showModal(`<div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:60;display:flex;align-items:flex-end" onclick="closeModal()">
-    <div style="background:var(--sur);width:100%;max-width:600px;margin:0 auto;border-radius:20px 20px 0 0;padding:20px;max-height:88vh;overflow-y:auto" onclick="event.stopPropagation()">
-      <div style="font-size:17px;font-weight:700;margin-bottom:10px">🛒 ${T('Ordine farmacia','Pharmacy order')} (${_orderLines.length})</div>
-      <div style="font-size:13px;color:var(--t2);margin-bottom:6px">${T('Confezioni: calcolate in automatico o scritte da te','Boxes: auto-calculated or set by you')}</div>
-      <div class="pills" style="margin-bottom:12px">
-        ${[30, 60, 90].map(d => `<button class="pill ${_orderDays === d ? 'active' : ''}" onclick="orderSetDays(${d})">${d} ${T('gg','d')}</button>`).join('')}
-        <button class="pill ${_orderDays === 'manual' ? 'active' : ''}" onclick="orderSetDays('manual')">✎ ${T('A mano','Manual')}</button>
-      </div>
-      ${_orderLines.map((l, i) => `
-        <div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--br)">
-          <div style="flex:1;min-width:0">
-            <div style="font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(l.name)}</div>
-            <div style="font-size:12px;color:var(--t2)">👤 ${escHtml(l.patient)} • ${l.left} ${T('rimaste','left')}${l.boxQty ? ' • ' + T('scatola da','box of') + ' ' + l.boxQty : ''}</div>
-          </div>
-          <div class="qty-ctrl">
-            <button onclick="orderAdj(${i},-1)">−</button>
-            <input id="ord-n-${i}" type="number" min="0" value="${l.boxes}" oninput="orderSetBoxes(${i},this.value)"
-              style="width:44px;text-align:center;font-size:15px;font-weight:700;border:none;background:none;color:var(--t1)">
-            <button onclick="orderAdj(${i},1)">+</button>
-          </div>
-          <span style="font-size:12px;color:var(--t2)">conf.</span>
-        </div>`).join('')}
-      <div style="font-size:12px;color:var(--t3);margin-top:6px">${T('Le confezioni sono calcolate in automatico: correggile con − e + se serve. Con 0 la riga non viene inviata.','Boxes are auto-calculated: adjust with − and +. Lines at 0 are not sent.')}</div>
-      <div style="margin-top:12px">
-        <button class="btn-primary" onclick="sendOrderPdf()">📄 ${T('Invia PDF (email, WhatsApp...)','Send PDF (email, WhatsApp...)')}</button>
-        <button class="btn-secondary" onclick="shareOrderWhatsApp()">💬 ${T('Messaggio WhatsApp','WhatsApp message')}</button>
-        <button class="btn-secondary" onclick="shareOrderEmail()">✉️ ${T('Email (testo semplice)','Email (plain text)')}${phEmail ? '' : ' *'}</button>
-        <button class="btn-secondary" onclick="printOrder()">🖨 ${T('Stampa','Print')}</button>
-        <button class="btn-secondary" onclick="copyOrder(this)">📋 ${T('Copia testo','Copy text')}</button>
-        <button class="btn-secondary" onclick="closeModal()">${T('Chiudi','Close')}</button>
-        ${!phEmail ? `<div style="font-size:12px;color:var(--t3);margin-top:8px">* ${T('Imposta email/telefono della farmacia in Impostazioni per averli già pronti','Set pharmacy email/phone in Settings')}</div>` : ''}
-      </div>
-    </div>
-  </div>`);
+function orderCheckEmpty() {
+  if (!orderLines().length) { alert(T('Metti almeno 1 confezione a un farmaco','Set at least 1 box')); return true; }
+  return false;
 }
 
 function makeOrderPdfBlob() {
-  const items = _orderLines.filter(l => l.boxes > 0);
+  const items = orderLines();
   const lines = [];
   lines.push({ text: T('Ordine farmaci','Medicine order'), size: 19, bold: true, gap: 26 });
   if (_fbFacilityName) lines.push({ text: _fbFacilityName, size: 13, bold: true, gap: 18 });
-  lines.push({ text: fmtDate(new Date().toISOString()) + (_orderDays === 'manual' ? '' : '  ·  ' + T('copertura','coverage') + ' ' + _orderDays + ' ' + T('giorni','days')), size: 11, gap: 20 });
+  lines.push({ text: fmtDate(new Date().toISOString()), size: 11, gap: 20 });
   lines.push({ text: '', gap: 10 });
   _wrapText(T('Vi chiediamo cortesemente di fornire i seguenti farmaci:','Please kindly supply the following medicines:'), 88).forEach(t => lines.push({ text: t, gap: 16 }));
   lines.push({ text: '', gap: 8 });
+  let lastPt = '';
   items.forEach(l => {
+    if (l.patient !== lastPt) {
+      lines.push({ text: '', gap: 6 });
+      lines.push({ text: l.patient, size: 11.5, gap: 17 });
+      lastPt = l.patient;
+    }
     const qty = l.boxes + ' ' + T(l.boxes === 1 ? 'confezione' : 'confezioni', l.boxes === 1 ? 'box' : 'boxes') + (l.boxQty ? ' (' + T('da','of') + ' ' + l.boxQty + ')' : '');
     _wrapText('• ' + l.name + ' — ' + qty, 78).forEach((t, i) => lines.push({ text: i ? '   ' + t : t, size: 12.5, bold: true, gap: 18 }));
-    lines.push({ text: '   ' + T('per ','for ') + l.patient, size: 10.5, gap: 15 });
   });
-  lines.push({ text: '', gap: 14 });
+  lines.push({ text: '', gap: 16 });
   _wrapText(T('Grazie per la cortese collaborazione.','Thank you for your kind cooperation.'), 88).forEach(t => lines.push({ text: t, gap: 16 }));
   if (_fbFacilityName) lines.push({ text: _fbFacilityName, bold: true, gap: 22 });
   return makePdfBlob(lines);
 }
 
 async function sendOrderPdf() {
-  if (!_orderLines.filter(l => l.boxes > 0).length) { alert(T('Nessun farmaco da ordinare: metti almeno 1 confezione','Nothing to order: set at least 1 box')); return; }
+  if (orderCheckEmpty()) return;
   const accomp = T('Buongiorno, in allegato il nostro ordine farmaci (PDF). Grazie!','Hello, please find our medicine order attached (PDF). Thank you!') +
     (_fbFacilityName ? ' — ' + _fbFacilityName : '');
-  await sharePdfBlob(makeOrderPdfBlob(),
-    'ordine-farmaci-' + todayISO() + '.pdf',
-    T('Ordine farmaci','Medicine order'), accomp);
+  await sharePdfBlob(makeOrderPdfBlob(), 'ordine-farmaci-' + todayISO() + '.pdf', T('Ordine farmaci','Medicine order'), accomp);
 }
 
 function shareOrderWhatsApp() {
+  if (orderCheckEmpty()) return;
   const phPhone = (D.settings.pharmacyPhone || '').replace(/[^0-9+]/g, '').replace('+', '');
   window.open('https://wa.me/' + (phPhone ? phPhone : '') + '?text=' + encodeURIComponent(orderText()), '_blank');
 }
 
 function shareOrderEmail() {
+  if (orderCheckEmpty()) return;
   const to = D.settings.pharmacyEmail || '';
   location.href = 'mailto:' + to + '?subject=' + encodeURIComponent(T('Ordine farmaci','Medicine order') + (_fbFacilityName ? ' — ' + _fbFacilityName : '')) + '&body=' + encodeURIComponent(orderText());
 }
 
 function copyOrder(btn) {
+  if (orderCheckEmpty()) return;
   navigator.clipboard?.writeText(orderText()).then(() => { if (btn) btn.textContent = '✓ ' + T('Copiato!','Copied!'); });
 }
 
 function printOrder() {
-  const lines = _orderLines.filter(l => l.boxes > 0);
+  if (orderCheckEmpty()) return;
+  const lines = orderLines();
   const html = `<!DOCTYPE html><html lang="it"><head><meta charset="UTF-8"><title>${T('Ordine farmacia','Pharmacy order')}</title>
   <style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:24px;color:#1a1a1a;max-width:800px}
   h1{font-size:20px}table{width:100%;border-collapse:collapse;margin-top:14px;font-size:14px}
@@ -3376,9 +3490,9 @@ function printOrder() {
   td{padding:8px;border-bottom:1px solid #eee}
   .foot{margin-top:26px;font-size:11px;color:#999;text-align:center}</style></head><body>
   <h1>🛒 ${T('Ordine farmaci','Medicine order')}${_fbFacilityName ? ' — ' + escHtml(_fbFacilityName) : ''}</h1>
-  <div style="font-size:13px;color:#666">${fmtDate(new Date().toISOString())} · ${_orderDays === 'manual' ? T('quantità decise a mano','manual quantities') : T('copertura','coverage') + ' ' + _orderDays + ' ' + T('giorni','days')}</div>
-  <table><thead><tr><th>${T('Farmaco','Medicine')}</th><th>${T('Confezioni','Boxes')}</th><th>${T('Paziente','Patient')}</th><th>${T('Rimaste','Left')}</th></tr></thead>
-  <tbody>${lines.map(l => `<tr><td><strong>${escHtml(l.name)}</strong></td><td>${l.boxes}${l.boxQty ? ' (da ' + l.boxQty + ')' : ''}</td><td>${escHtml(l.patient)}</td><td>${l.left}</td></tr>`).join('')}</tbody></table>
+  <div style="font-size:13px;color:#666">${fmtDate(new Date().toISOString())}</div>
+  <table><thead><tr><th>${T('Farmaco','Medicine')}</th><th>${T('Confezioni','Boxes')}</th><th>${T('Paziente','Patient')}</th></tr></thead>
+  <tbody>${lines.map(l => `<tr><td><strong>${escHtml(l.name)}</strong></td><td>${l.boxes}${l.boxQty ? ' (da ' + l.boxQty + ')' : ''}</td><td>${escHtml(l.patient)}</td></tr>`).join('')}</tbody></table>
   <div class="foot">CareStock • ${fmtDatetime(new Date().toISOString())}</div>
   <script>window.print();<\/script></body></html>`;
   const win = window.open('about:blank', '_blank');
