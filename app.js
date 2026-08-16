@@ -1,4 +1,5 @@
 /* CareStock PWA */
+const APP_VERSION = '9';
 'use strict';
 
 // ── Constants ──────────────────────────────────────────────
@@ -2346,7 +2347,9 @@ function renderSettings() {
         <div class="stat-cell"><div class="stat-num">${totalVisits}</div><div class="stat-label">${T('Visite','Visits')}</div></div>
         <div class="stat-cell"><div class="stat-num">${D.medicineDb.length}</div><div class="stat-label">Database</div></div>
       </div>
-      <div style="padding:12px 16px;font-size:12px;color:var(--t3)">${T('I dati sono sincronizzati su Firebase in tempo reale tra tutti gli utenti.','Data is synced on Firebase in real time across all users.')}</div>
+      <div style="padding:12px 16px;font-size:12px;color:var(--t3)">${T('I dati sono sincronizzati su Firebase in tempo reale tra tutti gli utenti.','Data is synced on Firebase in real time across all users.')}
+        <span style="display:block;margin-top:6px">CareStock ${T('versione','version')} ${APP_VERSION} · <a onclick="forceUpdate()" style="color:var(--p);font-weight:600;cursor:pointer">${T('Cerca aggiornamenti','Check for updates')}</a></span>
+      </div>
       <div style="padding:0 16px 8px;display:flex;flex-direction:column;gap:8px">
         <button class="btn-primary" style="display:flex;align-items:center;justify-content:center;gap:8px" onclick="exportData()">${svgIcon('ic-download',18)} ${T('Esporta backup (.json)','Export backup (.json)')}</button>
         ${canEdit() ? `<button class="btn-secondary" style="display:flex;align-items:center;justify-content:center;gap:8px" onclick="importData()">${svgIcon('ic-upload',18)} ${T('Importa da backup','Import from backup')}</button>
@@ -4250,10 +4253,26 @@ function escHtml(str) {
     .replace(/'/g, '&#39;');
 }
 
+// ── Aggiornamento forzato ───────────────────────────────────
+async function forceUpdate() {
+  try {
+    if ('serviceWorker' in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map(r => r.unregister()));
+    }
+    if (window.caches) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map(k => caches.delete(k)));
+    }
+  } catch(e) {}
+  location.replace(location.pathname + '?u=' + Date.now());
+}
+
 // ── Init ────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('./sw.js').then(() => {
+    navigator.serviceWorker.register('./sw.js').then(reg => {
+      reg.update().catch(() => {});
       navigator.serviceWorker.addEventListener('controllerchange', () => {
         window.location.reload();
       });
