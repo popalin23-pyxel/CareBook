@@ -3428,10 +3428,9 @@ function buildNotifyText(pt) {
   const rec = _notifyTo === 'doctor' ? (pt.doctor || {}) : (pt.family || {});
   const meds = notifySelectedMeds(pt);
   let txt = (rec.name ? T('Gentile ', 'Dear ') + rec.name + ',\n' : '') +
-    T(`per ${pt.name} segnaliamo i seguenti farmaci da procurare:`, `for ${pt.name}, the following medicines are needed:`) + '\n\n';
+    T(`per ${pt.name} ci occorrono questi farmaci:`, `for ${pt.name} we need these medicines:`) + '\n\n';
   meds.forEach(m => {
-    const ns = notifyMedStatus(m);
-    txt += `• ${m.name} — ${ns.label}\n`;
+    txt += `• ${m.name}\n`;
   });
   txt += '\n' + T('Può gentilmente provvedere? Grazie!','Could you kindly take care of it? Thank you!') +
     (_fbFacilityName ? '\n' + _fbFacilityName : '');
@@ -3502,15 +3501,15 @@ function makeNotifyPdfBlob(pt) {
   const meds = notifySelectedMeds(pt);
   const lines = [];
   lines.push({ text: T('Farmaci da procurare','Medicines needed'), size: 19, bold: true, gap: 26 });
-  lines.push({ text: T('Paziente: ','Patient: ') + pt.name + '  ·  ' + fmtDate(new Date().toISOString()), size: 11, gap: 20 });
-  if (_fbFacilityName) lines.push({ text: _fbFacilityName, size: 11, gap: 16 });
+  lines.push({ text: T('Paziente: ','Patient: ') + pt.name, size: 13, bold: true, gap: 20 });
+  if (pt.allergies) _wrapText(T('Note / allergie: ','Notes / allergies: ') + pt.allergies, 86).forEach(t => lines.push({ text: t, size: 11, gap: 16 }));
+  lines.push({ text: fmtDate(new Date().toISOString()) + (_fbFacilityName ? '  ·  ' + _fbFacilityName : ''), size: 11, gap: 18 });
   lines.push({ text: '', gap: 12 });
   if (rec.name) lines.push({ text: T('Gentile ','Dear ') + rec.name + ',', gap: 18 });
-  _wrapText(T(`la informiamo che i seguenti farmaci di ${pt.name} sono da procurare:`, `the following medicines for ${pt.name} are needed:`), 88).forEach(t => lines.push({ text: t, gap: 16 }));
+  _wrapText(T('ci occorrono i seguenti farmaci:', 'we need the following medicines:'), 88).forEach(t => lines.push({ text: t, gap: 16 }));
   lines.push({ text: '', gap: 8 });
   meds.forEach(m => {
-    const ns = notifyMedStatus(m);
-    _wrapText('• ' + m.name + ' — ' + ns.label, 84).forEach((t, i) => lines.push({ text: i ? '   ' + t : t, size: 12.5, bold: true, gap: 19 }));
+    _wrapText('• ' + m.name, 84).forEach((t, i) => lines.push({ text: i ? '   ' + t : t, size: 12.5, bold: true, gap: 19 }));
   });
   lines.push({ text: '', gap: 14 });
   _wrapText(T('La ringraziamo per la cortese collaborazione.','Thank you for your kind cooperation.'), 88).forEach(t => lines.push({ text: t, gap: 16 }));
@@ -3525,9 +3524,13 @@ async function sendNotifyPdf() {
   const blob = makeNotifyPdfBlob(pt);
   const fname = T('farmaci','medicines') + '-' + pt.name.replace(/[^a-zA-Z0-9]+/g, '-').toLowerCase() + '.pdf';
   const file = new File([blob], fname, { type: 'application/pdf' });
+  const recN = _notifyTo === 'doctor' ? (pt.doctor || {}) : (pt.family || {});
+  const accompText = (recN.name ? T('Gentile ','Dear ') + recN.name + ', ' : '') +
+    T('ci occorrono questi farmaci (vedi PDF allegato). Grazie!','we need these medicines (see attached PDF). Thank you!') +
+    (_fbFacilityName ? ' — ' + _fbFacilityName : '');
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
     try {
-      await navigator.share({ files: [file], title: T('Farmaci da procurare','Medicines needed') });
+      await navigator.share({ files: [file], title: T('Farmaci da procurare','Medicines needed'), text: accompText });
       return;
     } catch(e) {
       if (e && e.name === 'AbortError') return;
