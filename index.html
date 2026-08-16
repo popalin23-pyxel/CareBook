@@ -33,7 +33,7 @@ body::after{content:'';position:fixed;top:280px;right:-140px;width:430px;height:
 .page{position:relative;z-index:1}
 /* Animazioni */
 @keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
-.scroll>*{animation:fadeUp .38s cubic-bezier(.2,.7,.3,1) both}
+.scroll>*{animation:fadeUp .38s cubic-bezier(.2,.7,.3,1) backwards}
 .scroll>*:nth-child(2){animation-delay:.04s}
 .scroll>*:nth-child(3){animation-delay:.08s}
 .scroll>*:nth-child(4){animation-delay:.12s}
@@ -307,7 +307,7 @@ textarea.form-input{resize:vertical;min-height:70px}
 .empty{text-align:center;padding:40px 20px;color:var(--t3);font-size:14px}
 
 /* Autocomplete dropdown */
-.autocomplete{position:relative}
+.autocomplete{position:relative;z-index:40}
 .autocomplete-list{position:absolute;top:100%;left:0;right:0;background:var(--sur);border:1.5px solid var(--br);border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.12);z-index:100;max-height:200px;overflow-y:auto;margin-top:4px}
 .autocomplete-item{padding:11px 14px;font-size:14px;cursor:pointer;border-bottom:1px solid var(--br)}
 .autocomplete-item:last-child{border-bottom:none}
