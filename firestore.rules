@@ -55,19 +55,43 @@ service cloud.firestore {
     // Contiene pazienti, terapie, depositi: il dato più sensibile.
     match /appData/{facilityId} {
 
+      function inThisFacility() {
+        return myFacility() != '' && myFacility() == facilityId;
+      }
+
       // Lettura: solo chi è assegnato a QUESTA struttura (o il super admin).
       // Un utente della struttura A non può leggere appData della struttura B
       // nemmeno chiamando l'API direttamente.
-      allow get: if isSuper()
-                 || (myFacility() != '' && myFacility() == facilityId);
+      allow get: if isSuper() || inThisFacility();
 
       // Nessuno può elencare tutte le strutture in blocco.
       allow list: if isSuper();
 
       // Scrittura: solo ruoli abilitati, e solo sulla propria struttura.
       // I 'nurse-read' sono bloccati anche lato server, non solo nell'app.
-      allow write: if isSuper()
-                   || (myFacility() != '' && myFacility() == facilityId && canWriteData());
+      allow write: if isSuper() || (inThisFacility() && canWriteData());
+
+      // ── Pazienti (un documento ciascuno) ──
+      match /patients/{patientId} {
+        allow read: if isSuper() || inThisFacility();
+        allow write: if isSuper() || (inThisFacility() && canWriteData());
+      }
+
+      // ── Depositi / magazzino ──
+      match /locations/{locationId} {
+        allow read: if isSuper() || inThisFacility();
+        allow write: if isSuper() || (inThisFacility() && canWriteData());
+      }
+
+      // ── Registro movimenti: SOLA AGGIUNTA ──
+      // Una volta scritto, un movimento non può più essere modificato
+      // né cancellato da nessuno (nemmeno dal super admin): è la
+      // tracciabilità richiesta in ambito sanitario.
+      match /movements/{movementId} {
+        allow read: if isSuper() || inThisFacility();
+        allow create: if inThisFacility() && canWriteData();
+        allow update, delete: if false;
+      }
     }
 
     // ── Profili utente ────────────────────────────────────────

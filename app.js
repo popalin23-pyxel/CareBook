@@ -1,5 +1,5 @@
 /* CareStock PWA */
-const APP_VERSION = '12';
+const APP_VERSION = '13';
 'use strict';
 
 // ── Constants ──────────────────────────────────────────────
@@ -36,6 +36,13 @@ const auth = firebase.auth();
 let _fbUser = null;
 let _fbRole = 'viewer';
 let _fbUnsubData = null;
+
+function stopFbListeners() {
+  if (typeof _fbUnsubs !== 'undefined') {
+    _fbUnsubs.forEach(u => { try { u(); } catch(e) {} });
+    _fbUnsubs = [];
+  }
+}
 let _fbFacilityId = null;
 let _fbFacilityName = '';
 let _saUnsubs = [];
@@ -86,11 +93,131 @@ function loadData() {
   };
 }
 
+// Archivio v2: il documento della struttura contiene solo le impostazioni;
+// pazienti, depositi e movimenti stanno in sottocollezioni separate.
+// Così due operatori che modificano pazienti diversi non si sovrascrivono
+// a vicenda, e il documento non cresce oltre il limite di 1 MB.
+let _synced = { patients: {}, locations: {}, meta: '' };
+let _saveTimer = null;
+
+function facilityRef() { return db.collection('appData').doc(_fbFacilityId); }
+
+function metaOf(d) {
+  return {
+    medicineDb: d.medicineDb || [],
+    operators: d.operators || [],
+    settings: d.settings || {},
+    barcodes: d.barcodes || {}
+  };
+}
+
+function canSync() { return !!(_fbUser && canEdit() && _fbFacilityId); }
+
+// Elementi modificati localmente e non ancora sul server: finché sono qui,
+// gli aggiornamenti in arrivo dagli altri operatori non li sovrascrivono.
+let _pending = { patients: {}, locations: {}, meta: false };
+
+function markPending() {
+  (D.patients || []).forEach(p => {
+    if (p && p.id && _synced.patients[p.id] !== JSON.stringify(p)) _pending.patients[p.id] = 1;
+  });
+  Object.keys(_synced.patients).forEach(id => {
+    if (!(D.patients || []).some(p => p && p.id === id)) _pending.patients[id] = 1;
+  });
+  (D.locations || []).forEach(l => {
+    if (l && l.id && _synced.locations[l.id] !== JSON.stringify(l)) _pending.locations[l.id] = 1;
+  });
+  Object.keys(_synced.locations).forEach(id => {
+    if (!(D.locations || []).some(l => l && l.id === id)) _pending.locations[id] = 1;
+  });
+  if (_synced.meta !== JSON.stringify(metaOf(D))) _pending.meta = true;
+}
+
 function save() {
   try { localStorage.setItem(LS, JSON.stringify(D)); } catch(e) {}
-  if (_fbUser && canEdit() && _fbFacilityId) {
-    db.collection('appData').doc(_fbFacilityId).set(sanitizeForFirestore(D))
-      .catch(err => console.warn('Firestore save failed:', err.code));
+  if (!canSync()) return;
+  markPending();
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(pushChanges, 300);
+}
+
+// Allinea una lista locale a quella del server SENZA sostituire gli oggetti:
+// i riferimenti tenuti dalle finestre aperte restano validi, e una modifica
+// fatta qui e non ancora salvata non viene mai cancellata da un aggiornamento
+// in arrivo da un altro operatore.
+function mergeList(local, serverList, syncedMap) {
+  const byId = {};
+  local.forEach(o => { if (o && o.id) byId[o.id] = o; });
+  const onServer = {};
+  const result = [];
+
+  serverList.forEach(s => {
+    onServer[s.id] = 1;
+    const existing = byId[s.id];
+    if (!existing) { result.push(s); return; }
+    // Se l'oggetto locale è diverso da com'era all'ultima sincronizzazione,
+    // qui c'è una modifica non ancora salvata: si tiene quella.
+    if (syncedMap[s.id] !== undefined && syncedMap[s.id] !== JSON.stringify(existing)) {
+      result.push(existing);
+      return;
+    }
+    Object.keys(existing).forEach(k => { if (!(k in s)) delete existing[k]; });
+    Object.assign(existing, s);
+    result.push(existing);
+  });
+
+  // Elementi creati su questo telefono e non ancora arrivati al server
+  local.forEach(o => {
+    if (o && o.id && !onServer[o.id] && syncedMap[o.id] === undefined) result.push(o);
+  });
+
+  local.length = 0;
+  result.forEach(o => local.push(o));
+  return local;
+}
+
+async function pushChanges() {
+  if (!canSync()) return;
+  const ref = facilityRef();
+  const batch = db.batch();
+  let n = 0;
+
+  // Pazienti: scrive solo quelli davvero cambiati
+  const nowP = {};
+  (D.patients || []).forEach(p => {
+    if (!p || !p.id) return;
+    const j = JSON.stringify(p);
+    nowP[p.id] = j;
+    if (_synced.patients[p.id] !== j) { batch.set(ref.collection('patients').doc(p.id), sanitizeForFirestore(p)); n++; }
+  });
+  Object.keys(_synced.patients).forEach(id => {
+    if (!(id in nowP)) { batch.delete(ref.collection('patients').doc(id)); n++; }
+  });
+
+  // Depositi
+  const nowL = {};
+  (D.locations || []).forEach(l => {
+    if (!l || !l.id) return;
+    const j = JSON.stringify(l);
+    nowL[l.id] = j;
+    if (_synced.locations[l.id] !== j) { batch.set(ref.collection('locations').doc(l.id), sanitizeForFirestore(l)); n++; }
+  });
+  Object.keys(_synced.locations).forEach(id => {
+    if (!(id in nowL)) { batch.delete(ref.collection('locations').doc(id)); n++; }
+  });
+
+  // Impostazioni, operatori, prontuario personale, codici a barre
+  const meta = metaOf(D);
+  const metaJ = JSON.stringify(meta);
+  if (_synced.meta !== metaJ) { batch.set(ref, sanitizeForFirestore(meta), { merge: true }); n++; }
+
+  if (!n) return;
+  try {
+    await batch.commit();
+    _synced = { patients: nowP, locations: nowL, meta: metaJ };
+    _pending = { patients: {}, locations: {}, meta: false };
+  } catch(err) {
+    console.warn('Sync fallita:', err.code || err.message);
   }
 }
 
@@ -100,9 +227,17 @@ function uid() {
 
 // ── Storico movimenti ───────────────────────────────────────
 function logMove(action, name, qty, where) {
+  const mv = { id: uid(), date: new Date().toISOString(), op: activeOp().name, action, name, qty, where };
   if (!D.movements) D.movements = [];
-  D.movements.push({ id: uid(), date: new Date().toISOString(), op: activeOp().name, action, name, qty, where });
+  D.movements.push(mv);
   if (D.movements.length > 600) D.movements = D.movements.slice(-500);
+  // Il registro è a sola aggiunta: ogni movimento è un documento separato che
+  // nessuno può modificare o cancellare (imposto dalle regole di sicurezza).
+  if (canSync()) {
+    facilityRef().collection('movements').doc(mv.id)
+      .set(sanitizeForFirestore(mv))
+      .catch(err => console.warn('Registro:', err.code || err.message));
+  }
 }
 
 function fmtDate(isoStr) {
@@ -513,7 +648,7 @@ function renderSearchResults() {
 async function handleAuthChange(user) {
   _fbUser = user;
   if (!user) {
-    if (_fbUnsubData) { _fbUnsubData(); _fbUnsubData = null; }
+    stopFbListeners();
     navigate('login');
     return;
   }
@@ -551,34 +686,136 @@ async function handleAuthChange(user) {
   setupFbListeners();
 }
 
-function setupFbListeners() {
-  if (_fbUnsubData) _fbUnsubData();
-  if (!_fbFacilityId) return;
-  const LIVE_PAGES = ['home', 'alerts', 'order', 'locations', 'location-detail', 'patients', 'patient-detail', 'calendar', 'db', 'settings', 'search'];
-  _fbUnsubData = db.collection('appData').doc(_fbFacilityId).onSnapshot(snap => {
-    if (snap.exists) {
-      const data = snap.data();
-      if (data) {
-        D = data;
-        try { localStorage.setItem(LS, JSON.stringify(D)); } catch(e) {}
-      }
-    } else if (_fbRole === 'admin' || isSuperAdmin()) {
-      const opId = uid();
-      const init = { patients: [], medicineDb: [], operators: [{id:opId, name:'Operatore', color:OP_COLORS[0]}], settings: {language:'it', alertDays:7, activeOperatorId:opId} };
-      db.collection('appData').doc(_fbFacilityId).set(sanitizeForFirestore(init)).catch(console.error);
-      D = init;
-    }
-    if (['login', 'register', 'waiting', 'super-admin'].includes(S.page)) {
-      navigate('home');
-      checkPinOnStart();
-    } else if (LIVE_PAGES.includes(S.page)) {
-      renderPage(S.page);
-      updateBottomNav(S.page);
-    }
-  }, err => {
-    console.error('Firestore error:', err);
-    if (['login', 'register', 'waiting', 'super-admin'].includes(S.page)) navigate('home');
+const LIVE_PAGES = ['home', 'alerts', 'order', 'locations', 'location-detail',
+  'patients', 'patient-detail', 'calendar', 'db', 'settings', 'search', 'history', 'stats'];
+
+let _fbUnsubs = [];
+
+function refreshLive() {
+  try { localStorage.setItem(LS, JSON.stringify(D)); } catch(e) {}
+  if (['login', 'register', 'waiting', 'super-admin'].includes(S.page)) {
+    navigate('home');
+    checkPinOnStart();
+  } else if (LIVE_PAGES.includes(S.page)) {
+    renderPage(S.page);
+    updateBottomNav(S.page);
+  }
+}
+
+// Porta l'archivio dal vecchio formato (tutto in un documento) al nuovo
+// (sottocollezioni). Non cancella nulla: i dati vecchi restano al loro posto
+// come rete di sicurezza.
+async function migrateToV2(ref, meta) {
+  const chunks = [];
+  const push = (coll, list) => (list || []).forEach(item => {
+    if (item && item.id) chunks.push({ coll, item });
   });
+  push('patients', meta.patients);
+  push('locations', meta.locations);
+  push('movements', meta.movements);
+  for (let i = 0; i < chunks.length; i += 400) {
+    const batch = db.batch();
+    chunks.slice(i, i + 400).forEach(({ coll, item }) => {
+      batch.set(ref.collection(coll).doc(item.id), sanitizeForFirestore(item));
+    });
+    await batch.commit();
+  }
+  await ref.set({ migratedV2: true }, { merge: true });
+}
+
+async function setupFbListeners() {
+  _fbUnsubs.forEach(u => { try { u(); } catch(e) {} });
+  _fbUnsubs = [];
+  _synced = { patients: {}, locations: {}, meta: '' };
+  _pending = { patients: {}, locations: {}, meta: false };
+  if (!_fbFacilityId) return;
+  const ref = facilityRef();
+
+  let meta = {};
+  try {
+    let snap = await ref.get();
+    if (!snap.exists) {
+      if (_fbRole === 'admin' || isSuperAdmin()) {
+        const opId = uid();
+        await ref.set({
+          medicineDb: [], operators: [{ id: opId, name: 'Operatore', color: OP_COLORS[0] }],
+          settings: { language: 'it', alertDays: 7, activeOperatorId: opId },
+          barcodes: {}, migratedV2: true
+        });
+        snap = await ref.get();
+      }
+    }
+    meta = snap.exists ? (snap.data() || {}) : {};
+
+    // Archivio ancora nel vecchio formato?
+    const hasLegacy = (meta.patients || []).length || (meta.locations || []).length;
+    if (!meta.migratedV2 && hasLegacy) {
+      if (canEdit()) {
+        await migrateToV2(ref, meta);
+        meta.migratedV2 = true;
+      } else {
+        // Sola lettura: mostra i dati vecchi finché un responsabile non aggiorna
+        D = { ...D, ...meta };
+        refreshLive();
+        return;
+      }
+    }
+  } catch(err) {
+    console.error('Apertura archivio:', err);
+  }
+
+  // ── Impostazioni / operatori / prontuario / codici ──
+  _fbUnsubs.push(ref.onSnapshot(snap => {
+    const m = snap.exists ? (snap.data() || {}) : {};
+    if (_synced.meta && _synced.meta !== JSON.stringify(metaOf(D))) { refreshLive(); return; }
+    D.medicineDb = m.medicineDb || [];
+    D.operators = (m.operators && m.operators.length) ? m.operators
+      : [{ id: uid(), name: 'Operatore', color: OP_COLORS[0] }];
+    D.settings = m.settings || { language: 'it', alertDays: 7, activeOperatorId: D.operators[0].id };
+    D.barcodes = m.barcodes || {};
+    _synced.meta = JSON.stringify(metaOf(D));
+    refreshLive();
+  }, err => console.error('Impostazioni:', err)));
+
+  // ── Pazienti ──
+  _fbUnsubs.push(ref.collection('patients').onSnapshot(snap => {
+    const list = [], seen = {};
+    snap.docs.forEach(doc => {
+      const p = { id: doc.id, ...doc.data() };
+      list.push(p);
+      seen[doc.id] = JSON.stringify(p);
+    });
+    if (!D.patients) D.patients = [];
+    mergeList(D.patients, list, _synced.patients);
+    const localP = {};
+    D.patients.forEach(p => { if (p && p.id) localP[p.id] = JSON.stringify(p); });
+    Object.keys(seen).forEach(id => { if (localP[id] === seen[id]) _synced.patients[id] = seen[id]; });
+    Object.keys(_synced.patients).forEach(id => { if (!(id in seen) && !(id in localP)) delete _synced.patients[id]; });
+    refreshLive();
+  }, err => console.error('Pazienti:', err)));
+
+  // ── Depositi ──
+  _fbUnsubs.push(ref.collection('locations').onSnapshot(snap => {
+    const list = [], seen = {};
+    snap.docs.forEach(doc => {
+      const l = { id: doc.id, ...doc.data() };
+      list.push(l);
+      seen[doc.id] = JSON.stringify(l);
+    });
+    if (!D.locations) D.locations = [];
+    mergeList(D.locations, list, _synced.locations);
+    const localL = {};
+    D.locations.forEach(l => { if (l && l.id) localL[l.id] = JSON.stringify(l); });
+    Object.keys(seen).forEach(id => { if (localL[id] === seen[id]) _synced.locations[id] = seen[id]; });
+    Object.keys(_synced.locations).forEach(id => { if (!(id in seen) && !(id in localL)) delete _synced.locations[id]; });
+    refreshLive();
+  }, err => console.error('Depositi:', err)));
+
+  // ── Registro movimenti (solo gli ultimi 300) ──
+  _fbUnsubs.push(ref.collection('movements').orderBy('date', 'desc').limit(300).onSnapshot(snap => {
+    D.movements = snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).reverse();
+    if (LIVE_PAGES.includes(S.page)) renderPage(S.page);
+  }, err => console.warn('Registro:', err.code || err.message)));
 }
 
 // ── Pages: Login / Register ──────────────────────────────────
@@ -654,7 +891,8 @@ async function doRegister() {
   if (!email || !pw) { if (errEl) errEl.textContent = 'Inserisci email e password.'; return; }
   if (errEl) errEl.textContent = 'Creazione account...';
   try {
-    await auth.createUserWithEmailAndPassword(email, pw);
+    const cred = await auth.createUserWithEmailAndPassword(email, pw);
+    try { await cred.user.sendEmailVerification(); } catch(e) {}
   } catch(err) {
     const msgs = { 'auth/email-already-in-use':'Email già in uso.', 'auth/invalid-email':'Email non valida.', 'auth/weak-password':'Password troppo debole (min 6 caratteri).', 'auth/operation-not-allowed':'Registrazione non abilitata nel progetto Firebase.' };
     if (errEl) errEl.textContent = msgs[err.code] || 'Errore di registrazione. Riprova.';
@@ -678,7 +916,7 @@ async function forgotPassword() {
 }
 
 async function doLogout() {
-  if (_fbUnsubData) { _fbUnsubData(); _fbUnsubData = null; }
+  stopFbListeners();
   _fbUser = null;
   _fbRole = 'viewer';
   await auth.signOut();
@@ -2362,6 +2600,16 @@ function renderSettings() {
     <div class="settings-sec">
       <div class="settings-sec-title">${svgIcon('ic-lock',14)} ${T('PROTEZIONE PIN','PIN PROTECTION')}</div>
       <div class="settings-sec-desc">${T('Proteggi l\'accesso con un PIN a 4 cifre. Utile se il telefono lo usano più persone.','Protect access with a 4-digit PIN. Useful if multiple people use the phone.')}</div>
+      <div class="settings-row">
+        <span class="settings-row-label">⏱ ${T('Blocco automatico','Auto-lock')}</span>
+        <select class="form-input" style="width:auto;padding:6px 8px;font-size:13px" onchange="setLockMinutes(this.value)">
+          <option value="0" ${lockMinutes() === 0 ? 'selected' : ''}>${T('Mai','Never')}</option>
+          <option value="2" ${lockMinutes() === 2 ? 'selected' : ''}>2 min</option>
+          <option value="5" ${lockMinutes() === 5 ? 'selected' : ''}>5 min</option>
+          <option value="15" ${lockMinutes() === 15 ? 'selected' : ''}>15 min</option>
+          <option value="30" ${lockMinutes() === 30 ? 'selected' : ''}>30 min</option>
+        </select>
+      </div>
       ${getPin() ? `
         <div class="settings-row">
           <span class="settings-row-label">${T('PIN attivo','PIN active')}</span>
@@ -4220,6 +4468,46 @@ function checkPinOnStart() {
   renderPinScreen();
 }
 
+// ── Blocco automatico dopo inattività ──────────────────────
+let _idleTimer = null;
+
+function lockMinutes() {
+  const v = parseInt(localStorage.getItem('cs_lock_min'), 10);
+  return isNaN(v) ? 5 : v;   // 0 = disattivato
+}
+
+function setLockMinutes(v) {
+  localStorage.setItem('cs_lock_min', String(parseInt(v, 10) || 0));
+  resetIdleTimer();
+  renderPage('settings');
+}
+
+function isLocked() {
+  return !!document.getElementById('pin-overlay');
+}
+
+function resetIdleTimer() {
+  clearTimeout(_idleTimer);
+  const mins = lockMinutes();
+  if (!getPin() || !mins || isLocked()) return;
+  _idleTimer = setTimeout(() => {
+    if (getPin() && !isLocked()) {
+      _pinBuffer = '';
+      _pinMode = 'unlock';
+      renderPinScreen();
+    }
+  }, mins * 60000);
+}
+
+function startIdleWatch() {
+  ['click', 'keydown', 'touchstart', 'scroll'].forEach(ev =>
+    document.addEventListener(ev, resetIdleTimer, { passive: true, capture: true }));
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') resetIdleTimer();
+  });
+  resetIdleTimer();
+}
+
 function renderPinScreen() {
   const isUnlock = _pinMode === 'unlock';
   const isConfirm = _pinMode === 'set-confirm';
@@ -4274,6 +4562,7 @@ function handlePinComplete() {
   if (_pinMode === 'unlock') {
     if (_pinBuffer === getPin()) {
       g('pin-overlay')?.remove();
+      resetIdleTimer();
     } else {
       const err = g('pin-err');
       if (err) err.textContent = T('PIN errato. Riprova.', 'Wrong PIN. Try again.');
@@ -4439,4 +4728,5 @@ document.addEventListener('DOMContentLoaded', () => {
     }).catch(() => {});
   }
   auth.onAuthStateChanged(handleAuthChange);
+  startIdleWatch();
 });
